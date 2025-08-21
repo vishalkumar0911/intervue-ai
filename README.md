@@ -1,6 +1,17 @@
-# Intervue.ai (Starter Scaffold)
+# Intervue.ai  
+Built by [Vishal Kumar, Pankaj Kumar Gupta]  
 
-Monorepo to keep Frontend (Next.js) and Backend (FastAPI) in sync.
+A mock-interview analysis platform using:
+- **Frontend**: Next.js + Tailwind CSS
+- **Backend**: FastAPI
+- **Database**: MongoDB / Firebase
+- **AI Modules**: Whisper (STT), GPT (NLP), MediaPipe (CV)
+
+## Features
+- AI-driven feedback
+- Content & fluency scoring
+- Non-verbal cue analysis
+
 
 ## Structure
 ```
