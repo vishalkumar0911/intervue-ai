@@ -36,4 +36,11 @@ intervue-ai/
 2. Initialize git and make the first commit (see instructions in your chat).
 3. (Later) Bootstrap frontend and backend.
 
+### Export data
+- CSV: `GET http://localhost:8000/attempts/export.csv`
+- JSON: `GET http://localhost:8000/attempts/export.json`
+- Clear: `DELETE http://localhost:8000/attempts`
+
+### Settings
+Settings (name, email, preferred role) are stored locally in `localStorage` under key `intervue.settings.v1`.
 ---
