@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---------- App-wide tokens / utilities ---------- */
+@layer base {
+  :root {
+    /* (optional) app brand shades if you want to reference them in CSS */
+  }
+
+  /* Keep base colors neutral; we set bg/text on <body> via Tailwind in layout.tsx */
+  html, body {
+    min-height: 100%;
+  }
+}
+
+/* Reusable muted foreground */
+@layer utilities {
+  .text-muted-foreground {
+    @apply text-slate-600 dark:text-white/70;
+  }
+}
+
+/* Radix (select) small animation helpers (optional) */
+@layer utilities {
+  .animate-in { animation: animate-in .15s ease-out both; }
+  .fade-in-0 { --tw-enter-opacity: 1; }
+  .zoom-in-95 { transform: scale(0.95); }
+  .animate-out { animation: animate-out .12s ease-in both; }
+  .fade-out-0 { --tw-exit-opacity: 0; }
+  .zoom-out-95 { transform: scale(0.95); }
+}

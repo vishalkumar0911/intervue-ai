@@ -1,0 +1,90 @@
+# ==================================================
+# Root-level .gitignore for intervue-ai project
+# ==================================================
+
+# ------------------------------
+# Node / Next.js (frontend)
+# ------------------------------
+# Ignore ALL node_modules everywhere
+**/node_modules/
+
+# Yarn / PNP cache
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# Coverage & testing
+**/coverage/
+
+# Next.js build outputs
+/frontend/.next/
+/frontend/out/
+/frontend/.turbo/
+/frontend/.vercel/
+
+# Production build folders
+/build
+
+# TypeScript artifacts
+*.tsbuildinfo
+next-env.d.ts
+
+# Misc
+.DS_Store
+*.pem
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment files
+.env
+.env.*
+!.env.example
+/frontend/.env
+/frontend/.env.*
+/backend/.env
+/backend/.env.*
+
+# ------------------------------
+# Python / FastAPI (backend)
+# ------------------------------
+backend/__pycache__/
+backend/.pytest_cache/
+backend/.mypy_cache/
+backend/.ruff_cache/
+backend/.coverage
+backend/htmlcov/
+backend/.venv/
+.venv/
+
+# SQLite / JSON DB
+backend/app/data/*.db
+backend/app/data/*.sqlite3
+backend/app/data/attempts.jsonl
+
+# ------------------------------
+# Root-level lock files
+# ------------------------------
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# ------------------------------
+# Editor / IDE settings
+# ------------------------------
+.vscode/
+.idea/
+*.swp
+
+# ------------------------------
+# OS-specific junk
+# ------------------------------
+.DS_Store
+Thumbs.db

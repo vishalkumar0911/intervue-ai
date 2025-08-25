@@ -1,0 +1,45 @@
+{
+  "Software Engineer": [
+    { "id": "se-1", "role": "Software Engineer", "text": "Explain the difference between a process and a thread.", "topic": "OS", "difficulty": "easy" },
+    { "id": "se-2", "role": "Software Engineer", "text": "How does HTTP/2 differ from HTTP/1.1?", "topic": "Networking", "difficulty": "medium" },
+    { "id": "se-3", "role": "Software Engineer", "text": "Design a URL shortener. Outline data models and APIs.", "topic": "System Design", "difficulty": "medium" },
+    { "id": "se-4", "role": "Software Engineer", "text": "What is a race condition? How do you prevent it?", "topic": "Concurrency", "difficulty": "easy" },
+    { "id": "se-5", "role": "Software Engineer", "text": "Explain CAP theorem and its implications.", "topic": "Distributed Systems", "difficulty": "medium" }
+  ],
+  "Frontend Developer": [
+    { "id": "fe-1", "role": "Frontend Developer", "text": "Explain reconciliation and keys in React.", "topic": "React", "difficulty": "easy" },
+    { "id": "fe-2", "role": "Frontend Developer", "text": "How would you optimize a slow Next.js page?", "topic": "Performance", "difficulty": "medium" },
+    { "id": "fe-3", "role": "Frontend Developer", "text": "What is hydration? Compare CSR, SSR, SSG.", "topic": "Rendering", "difficulty": "medium" },
+    { "id": "fe-4", "role": "Frontend Developer", "text": "Tailwind vs. CSS Modules — tradeoffs.", "topic": "Styling", "difficulty": "easy" }
+  ],
+  "Backend Developer": [
+    { "id": "be-1", "role": "Backend Developer", "text": "Explain database indexing and when it can hurt performance.", "topic": "Databases", "difficulty": "medium" },
+    { "id": "be-2", "role": "Backend Developer", "text": "How do you design idempotent APIs?", "topic": "APIs", "difficulty": "medium" },
+    { "id": "be-3", "role": "Backend Developer", "text": "Compare message queues vs. event streams with use cases.", "topic": "Systems", "difficulty": "medium" }
+  ],
+  "DevOps Engineer": [
+    { "id": "devops-1", "role": "DevOps Engineer", "text": "Blue-green vs canary deployments — when to use which?", "topic": "Deployments", "difficulty": "medium" },
+    { "id": "devops-2", "role": "DevOps Engineer", "text": "Explain infrastructure as code and drift management.", "topic": "IaC", "difficulty": "medium" },
+    { "id": "devops-3", "role": "DevOps Engineer", "text": "How do you design observability for a microservice?", "topic": "Observability", "difficulty": "hard" }
+  ],
+  "Data Scientist": [
+    { "id": "ds-1", "role": "Data Scientist", "text": "Bias vs variance trade-off — explain with examples.", "topic": "ML Basics", "difficulty": "easy" },
+    { "id": "ds-2", "role": "Data Scientist", "text": "How do you handle class imbalance?", "topic": "Modeling", "difficulty": "medium" },
+    { "id": "ds-3", "role": "Data Scientist", "text": "A/B test design — outline metrics and pitfalls.", "topic": "Experimentation", "difficulty": "medium" }
+  ],
+  "Product Manager": [
+    { "id": "pm-1", "role": "Product Manager", "text": "How do you define and validate an MVP?", "topic": "Strategy", "difficulty": "easy" },
+    { "id": "pm-2", "role": "Product Manager", "text": "Write a PRD outline for a new onboarding flow.", "topic": "Docs", "difficulty": "medium" },
+    { "id": "pm-3", "role": "Product Manager", "text": "Which metrics would you track post-launch for retention?", "topic": "Metrics", "difficulty": "medium" }
+  ],
+  "UI/UX Designer": [
+    { "id": "ux-1", "role": "UI/UX Designer", "text": "Explain information architecture and card sorting.", "topic": "IA", "difficulty": "easy" },
+    { "id": "ux-2", "role": "UI/UX Designer", "text": "How do you run usability tests? Steps and success criteria.", "topic": "Research", "difficulty": "medium" },
+    { "id": "ux-3", "role": "UI/UX Designer", "text": "Design a dashboard for analytics — what layout and why?", "topic": "Design", "difficulty": "medium" }
+  ],
+  "Human Resources Manager": [
+    { "id": "hr-1", "role": "Human Resources Manager", "text": "Describe a structured interview process you would implement.", "topic": "Process", "difficulty": "easy" },
+    { "id": "hr-2", "role": "Human Resources Manager", "text": "How do you reduce interviewer bias?", "topic": "People Ops", "difficulty": "medium" },
+    { "id": "hr-3", "role": "Human Resources Manager", "text": "Create a rubric for culture-add interviews.", "topic": "Hiring", "difficulty": "medium" }
+  ]
+}
