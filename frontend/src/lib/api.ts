@@ -3,7 +3,7 @@ export type Question = {
   role: string;
   text: string;
   topic?: string | null;
-  difficulty?: "easy" | "medium" | "hard" | null;
+  difficulty?: string | null;
 };
 
 export type Attempt = {
@@ -11,72 +11,44 @@ export type Attempt = {
   role: string;
   score: number;
   duration_min: number;
-  date: string; // ISO string
+  date: string; // ISO
+  difficulty?: "easy" | "medium" | "hard";
 };
 
 export type AttemptCreate = {
   role: string;
-  score: number;         // 0..100
-  duration_min: number;  // minutes
-  date?: string;         // optional; server will set if omitted
+  score: number;
+  duration_min: number;
+  date?: string; // optional; server sets if missing
+  difficulty?: "easy" | "medium" | "hard";
 };
 
-// ---------- Config ----------
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
-const DEFAULT_TIMEOUT_MS = 15000;
+export type AttemptUpdate = Partial<AttemptCreate>;
 
-// ---------- Utils ----------
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+
+async function safe<T>(p: Promise<Response>): Promise<T> {
+  const res = await p;
+  if (!res.ok) {
+    let msg = `Request failed: ${res.status}`;
+    try {
+      const j = await res.json();
+      if (j?.detail) msg = Array.isArray(j.detail) ? j.detail[0]?.msg || msg : j.detail;
+    } catch {}
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
 function qs(params: Record<string, string | undefined>) {
-  const p = new URLSearchParams();
+  const u = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined && v !== "") p.set(k, v);
+    if (v !== undefined && v !== "") u.set(k, v);
   }
-  return p.toString();
+  return u.toString();
 }
 
-async function withTimeout<T>(promise: Promise<T>, ms = DEFAULT_TIMEOUT_MS): Promise<T> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort("timeout"), ms);
-  try {
-    // @ts-expect-error we pass controller from callers
-    return await promise(ctrl.signal);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function safeGet<T>(path: string): Promise<T> {
-  return withTimeout<T>(
-    (signal: AbortSignal) =>
-      fetch(`${API_BASE}${path}`, { cache: "no-store", signal }).then(async (res) => {
-        if (!res.ok) {
-          const text = await res.text().catch(() => "");
-          throw new Error(`GET ${path} → ${res.status} ${text}`);
-        }
-        return res.json();
-      })
-  );
-}
-
-async function safePost<T>(path: string, body: unknown): Promise<T> {
-  return withTimeout<T>(
-    (signal: AbortSignal) =>
-      fetch(`${API_BASE}${path}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-        signal,
-      }).then(async (res) => {
-        if (!res.ok) {
-          const text = await res.text().catch(() => "");
-          throw new Error(`POST ${path} → ${res.status} ${text}`);
-        }
-        return res.json();
-      })
-  );
-}
-
-// ---------- API ----------
 type QuestionsParams = {
   role: string;
   limit?: number;
@@ -87,18 +59,7 @@ type QuestionsParams = {
 };
 
 export const api = {
-  // Health (useful for local debugging)
-  health: () => safeGet<{
-    ok: boolean;
-    roles: string[];
-    counts: Record<string, number>;
-    questions_file: string;
-    attempts_file?: string;
-    server_time: number;
-  }>("/health"),
-
-  // Roles & Questions
-  roles: () => safeGet<string[]>("/roles"),
+  roles: () => safe<string[]>(fetch(`${API_BASE}/roles`, { cache: "no-store" })),
 
   questions: ({ role, limit = 20, offset = 0, difficulty, shuffle, seed }: QuestionsParams) => {
     const query = qs({
@@ -109,52 +70,43 @@ export const api = {
       shuffle: shuffle ? "true" : undefined,
       seed: seed !== undefined ? String(seed) : undefined,
     });
-    return safeGet<Question[]>(`/questions?${query}`);
+    return safe<Question[]>(fetch(`${API_BASE}/questions?${query}`, { cache: "no-store" }));
   },
 
-  nextQuestion: (role: string, index = 0, difficulty?: "easy" | "medium" | "hard") => {
-    const query = qs({ role, index: String(index), difficulty });
-    return safeGet<Question>(`/question/next?${query}`);
-  },
-
-  randomQuestion: (role: string, difficulty?: "easy" | "medium" | "hard", seed?: number) => {
+  nextQuestion: (role: string, index = 0, difficulty?: string) => {
     const query = qs({
       role,
+      index: String(index),
       difficulty,
-      seed: seed !== undefined ? String(seed) : undefined,
     });
-    return safeGet<Question>(`/questions/random?${query}`);
+    return safe<Question>(fetch(`${API_BASE}/question/next?${query}`, { cache: "no-store" }));
   },
 
-  search: (q: string, opts?: { role?: string; limit?: number }) => {
-    const query = qs({
-      q,
-      role: opts?.role,
-      limit: opts?.limit ? String(opts.limit) : undefined,
-    });
-    return safeGet<Question>(`/search?${query}`);
+  getAttempts: ({ role, limit = 100 }: { role?: string; limit?: number }) => {
+    const query = qs({ role, limit: String(limit) });
+    return safe<Attempt[]>(fetch(`${API_BASE}/attempts?${query}`, { cache: "no-store" }));
   },
 
-  // Attempts
-  getAttempts: (params?: { role?: string; limit?: number }) => {
-    const query = qs({
-      role: params?.role,
-      limit: params?.limit ? String(params.limit) : undefined,
-    });
-    const path = query ? `/attempts?${query}` : "/attempts";
-    return safeGet<Attempt[]>(path);
-  },
+  createAttempt: (a: AttemptCreate) =>
+    safe<Attempt>(
+      fetch(`${API_BASE}/attempts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(a),
+      })
+    ),
 
-  createAttempt: (payload: AttemptCreate) => {
-    return safePost<Attempt>("/attempts", payload);
-  },
+  deleteAttempt: (id: string) =>
+    safe<{ ok: boolean; deleted: number; id: string }>(
+      fetch(`${API_BASE}/attempts/${id}`, { method: "DELETE" })
+    ),
 
-  exportAttemptsCSV: () => `${API_BASE}/attempts/export.csv`,
-  exportAttemptsJSON: () => `${API_BASE}/attempts/export.json`,
-  clearAttempts: async () => {
-    const res = await fetch(`${API_BASE}/attempts`, { method: "DELETE" });
-    if (!res.ok) throw new Error("Failed to clear attempts");
-    return true;
-  },
-  
+  updateAttempt: (id: string, patch: AttemptUpdate) =>
+    safe<Attempt>(
+      fetch(`${API_BASE}/attempts/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      })
+    ),
 };

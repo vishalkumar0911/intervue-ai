@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Optional, Literal
-import json, random, time, uuid, io, csv
+from typing import List, Dict, Optional, Callable, Iterable, Any
+import json, random, time, uuid
 
-from fastapi import FastAPI, HTTPException, Query, Body
+from fastapi import FastAPI, HTTPException, Query, Body, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 
@@ -27,7 +26,7 @@ settings = Settings()
 
 
 # -------------------- App --------------------
-app = FastAPI(title="Intervue.AI API", version="1.3.0")
+app = FastAPI(title="Intervue.AI API", version="1.4.0")
 
 origins = [o.strip() for o in settings.BACKEND_CORS_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
@@ -48,20 +47,29 @@ class Question(BaseModel):
     difficulty: Optional[str] = "easy"
 
 
-# Attempts: use a create model so the server assigns id/date if omitted
-DifficultyL = Literal["easy", "medium", "hard"]
-
+# Attempts: support optional difficulty (so Analytics can stack by difficulty)
 class AttemptCreate(BaseModel):
     role: str
     score: int = Field(ge=0, le=100)
     duration_min: int = Field(ge=0)
     date: Optional[datetime] = None  # allow client to provide, otherwise now()
-    difficulty: Optional[DifficultyL] = None  # NEW (optional, helps Analytics)
+    difficulty: Optional[str] = Field(
+        default=None,
+        description="Optional tag: easy|medium|hard",
+    )
 
 
 class Attempt(AttemptCreate):
     id: str
-    date: datetime  # required in the stored model
+    date: datetime  # required in stored model
+
+
+class AttemptUpdate(BaseModel):
+    role: Optional[str] = None
+    score: Optional[int] = Field(default=None, ge=0, le=100)
+    duration_min: Optional[int] = Field(default=None, ge=0)
+    date: Optional[datetime] = None
+    difficulty: Optional[str] = None
 
 
 # -------------------- Data loading --------------------
@@ -100,99 +108,114 @@ def hot_reload_if_changed() -> None:
         if mtime != QUESTIONS_MTIME:
             load_questions_from_disk()
     except FileNotFoundError:
-        # leave existing data; /health will show the missing file
+        # keep old in memory; /health will reveal missing file
         pass
 
 
 @app.on_event("startup")
 def startup() -> None:
     load_questions_from_disk()
-    # ensure attempts file dir exists
     p = attempts_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     if not p.exists():
         p.touch()
 
 
-# -------------------- Helpers --------------------
-def _filtered_bank(role: str, difficulty: Optional[str]) -> List[Question]:
-    if role not in QUESTIONS:
-        raise HTTPException(status_code=404, detail="Unknown role")
-    bank = QUESTIONS[role]
-    if difficulty:
-        d = difficulty.lower()
-        bank = [q for q in bank if (q.difficulty or "").lower() == d]
-    return bank
+# -------------------- Robust JSONL helpers --------------------
+def _parse_line_to_records(line: str) -> list[dict]:
+    """
+    Parse a JSONL line that might be:
+      - a single JSON object     -> returns [obj]
+      - a JSON array of objects  -> returns [...objs]
+      - malformed                -> returns []
+    """
+    try:
+        parsed = json.loads(line)
+    except Exception:
+        return []
 
-
-def _append_attempt_jsonl(a: Attempt) -> None:
-    p = attempts_path()
-    with p.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(a.model_dump(), default=str) + "\n")
+    if isinstance(parsed, dict):
+        return [parsed]
+    if isinstance(parsed, list):
+        out = []
+        for item in parsed:
+            if isinstance(item, dict):
+                out.append(item)
+        return out
+    return []
 
 
 def _read_attempts_jsonl(limit: int = 100, role: Optional[str] = None) -> List[Attempt]:
+    """
+    Read attempts from JSONL, tolerant to lines that are arrays.
+    Returns most-recent-first, limited.
+    """
     p = attempts_path()
     out: List[Attempt] = []
     if not p.exists():
         return out
+
     with p.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
+        for raw in f:
+            raw = raw.strip()
+            if not raw:
                 continue
-            try:
-                rec = json.loads(line)
+            for rec in _parse_line_to_records(raw):
+                # filter early if asked for a role
                 if role and rec.get("role") != role:
                     continue
-                out.append(Attempt(**rec))
-            except Exception:
-                # skip corrupt line
-                continue
-    # JSONL is append-only (oldest first). Return most-recent first, limited.
+                try:
+                    out.append(Attempt(**rec))
+                except Exception:
+                    # skip invalid
+                    continue
+
+    # file is append-only (oldest first) → return newest first
     return out[::-1][:limit]
 
 
-# Aggregate helpers
-def _stats(attempts: List[Attempt]):
-    total = len(attempts)
-    if total == 0:
-        return {
-            "total": 0, "avg_score": 0, "total_minutes": 0,
-            "by_role": [], "by_role_sessions": [], "last_7d": {"count": 0, "avg": 0}
-        }
+def _rewrite_attempts_jsonl(transform: Callable[[dict], Optional[dict]]) -> int:
+    """
+    Read all attempts line-by-line, support array-lines, apply `transform(rec)` to each dict.
+    If transform returns None, record is dropped (e.g., delete).
+    Rewrites the file in-place. Returns number of records written.
+    """
+    p = attempts_path()
+    if not p.exists():
+        return 0
 
-    avg_score = round(sum(a.score for a in attempts) / total)
-    total_minutes = sum(a.duration_min for a in attempts)
+    tmp = p.with_suffix(".tmp")
+    written = 0
+    with p.open("r", encoding="utf-8") as fin, tmp.open("w", encoding="utf-8") as fout:
+        for raw in fin:
+            raw = raw.strip()
+            if not raw:
+                continue
 
-    # per-role sessions
-    role_sessions: Dict[str, int] = {}
-    role_scores: Dict[str, List[int]] = {}
-    for a in attempts:
-        role_sessions[a.role] = role_sessions.get(a.role, 0) + 1
-        role_scores.setdefault(a.role, []).append(a.score)
+            records = _parse_line_to_records(raw)
+            if not records:
+                continue
 
-    by_role_avg = [{"role": r, "avg": round(sum(v)/len(v))} for r, v in role_scores.items()]
-    by_role_avg.sort(key=lambda x: x["avg"], reverse=True)
+            for rec in records:
+                try:
+                    new_rec = transform(rec)
+                except Exception:
+                    # if transform itself crashes on a malformed rec, skip that rec
+                    continue
 
-    by_role_sessions = [{"role": r, "count": c} for r, c in role_sessions.items()]
-    by_role_sessions.sort(key=lambda x: x["count"], reverse=True)
+                if new_rec is None:
+                    # dropped
+                    continue
 
-    # last 7 days
-    now = datetime.utcnow()
-    week_ago = now - timedelta(days=7)
-    recent = [a for a in attempts if a.date >= week_ago]
-    last7_count = len(recent)
-    last7_avg = round(sum(a.score for a in recent)/last7_count) if last7_count else 0
+                try:
+                    fout.write(json.dumps(new_rec, default=str) + "\n")
+                    written += 1
+                except Exception:
+                    # on write error for this record, skip to next
+                    continue
 
-    return {
-        "total": total,
-        "avg_score": avg_score,
-        "total_minutes": total_minutes,
-        "by_role": by_role_avg,
-        "by_role_sessions": by_role_sessions,
-        "last_7d": {"count": last7_count, "avg": last7_avg},
-    }
+    tmp.replace(p)
+    return written
 
 
 # -------------------- Health --------------------
@@ -226,19 +249,12 @@ def list_questions(
     shuffle: bool = False,
     seed: Optional[int] = None,
 ):
-    """
-    List questions for a role with optional difficulty filter.
-    - offset/limit for paging
-    - shuffle with optional seed for deterministic order
-    """
     hot_reload_if_changed()
     bank = _filtered_bank(role, difficulty)
-
     if shuffle:
-        bank = bank[:]  # copy before shuffle
+        bank = bank[:]
         rng = random.Random(seed)
         rng.shuffle(bank)
-
     end = min(offset + limit, len(bank))
     return bank[offset:end]
 
@@ -249,7 +265,6 @@ def next_question(
     index: int = Query(0, ge=0),
     difficulty: Optional[str] = Query(None, pattern="^(easy|medium|hard)$"),
 ):
-    """Return item at index (wraps) with optional difficulty filter."""
     hot_reload_if_changed()
     bank = _filtered_bank(role, difficulty)
     if not bank:
@@ -263,7 +278,6 @@ def random_question(
     difficulty: Optional[str] = Query(None, pattern="^(easy|medium|hard)$"),
     seed: Optional[int] = None,
 ):
-    """Return one random question (deterministic if seed provided)."""
     hot_reload_if_changed()
     bank = _filtered_bank(role, difficulty)
     if not bank:
@@ -278,7 +292,6 @@ def search(
     role: Optional[str] = None,
     limit: int = Query(20, ge=1, le=200),
 ):
-    """Simple substring search in text/topic, optionally scoped to a role."""
     hot_reload_if_changed()
     haystack: List[Question] = []
     if role:
@@ -301,17 +314,24 @@ def get_attempts(
     role: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=500),
 ):
-    """Return most recent attempts first; can filter by role."""
     return _read_attempts_jsonl(limit=limit, role=role)
+
+
+@app.get("/attempts/{attempt_id}", response_model=Attempt)
+def get_attempt_by_id(attempt_id: str):
+    items = _read_attempts_jsonl(limit=10_000)
+    for a in items:
+        if a.id == attempt_id:
+            return a
+    raise HTTPException(status_code=404, detail="Attempt not found")
 
 
 @app.post("/attempts", response_model=Attempt)
 def add_attempt(payload: AttemptCreate = Body(...)):
-    """Create a new attempt; server assigns id and default date if missing."""
-    # Validate role against known roles for nicer UX
     if payload.role not in QUESTIONS:
         raise HTTPException(status_code=400, detail="Unknown role")
-
+    if payload.difficulty and payload.difficulty not in {"easy", "medium", "hard"}:
+        raise HTTPException(status_code=400, detail="Invalid difficulty")
     attempt = Attempt(
         id=str(uuid.uuid4()),
         role=payload.role,
@@ -321,82 +341,130 @@ def add_attempt(payload: AttemptCreate = Body(...)):
         difficulty=payload.difficulty,
     )
     try:
-        _append_attempt_jsonl(attempt)
+        # Always store as single-object JSONL lines
+        p = attempts_path()
+        with p.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(attempt.model_dump(), default=str) + "\n")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save attempt: {e}")
     return attempt
 
 
-# --------- NEW: export/clear/stats/seed ----------
-@app.get("/attempts/export.csv")
-def export_attempts_csv():
-    rows = _read_attempts_jsonl(limit=10_000)
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(["id", "role", "score", "duration_min", "date", "difficulty"])
-    for a in rows:
-        writer.writerow([a.id, a.role, a.score, a.duration_min, a.date.isoformat(), a.difficulty or ""])
-    buf.seek(0)
-    headers = {"Content-Disposition": 'attachment; filename="attempts.csv"'}
-    return StreamingResponse(iter([buf.read()]), media_type="text/csv", headers=headers)
+@app.delete("/attempts/{attempt_id}")
+def delete_attempt(attempt_id: str):
+    """
+    Delete one attempt by id. Returns 404 if not found.
+    Robust to legacy JSON array lines in the file.
+    """
+    found = False
+
+    def transform(rec: dict):
+        nonlocal found
+        if rec.get("id") == attempt_id:
+            found = True
+            return None  # drop
+        return rec
+
+    written = _rewrite_attempts_jsonl(transform)
+    if not found:
+        raise HTTPException(status_code=404, detail="Attempt not found")
+    return {"ok": True, "deleted": 1, "id": attempt_id, "remaining_written": written}
 
 
-@app.get("/attempts/export.json")
-def export_attempts_json():
-    rows = _read_attempts_jsonl(limit=10_000)
-    return JSONResponse([a.model_dump() for a in rows])
+@app.patch("/attempts/{attempt_id}", response_model=Attempt)
+def update_attempt(attempt_id: str, patch: AttemptUpdate):
+    """
+    Patch an attempt. If a provided role is invalid, the old role is kept.
+    Difficulty must be easy|medium|hard when provided.
+    """
+    updated: Optional[Attempt] = None
+
+    def transform(rec: dict):
+        nonlocal updated
+        if rec.get("id") != attempt_id:
+            return rec
+
+        # apply patch onto a copy of the dict
+        role = patch.role if patch.role is not None else rec.get("role")
+        if role not in QUESTIONS:
+            role = rec.get("role")
+
+        score = patch.score if patch.score is not None else rec.get("score")
+        duration_min = patch.duration_min if patch.duration_min is not None else rec.get("duration_min")
+
+        if patch.date is not None:
+            date_value: Any = patch.date.isoformat() if isinstance(patch.date, datetime) else patch.date
+        else:
+            date_value = rec.get("date")
+
+        difficulty = patch.difficulty if patch.difficulty is not None else rec.get("difficulty")
+        if difficulty and difficulty not in {"easy", "medium", "hard"}:
+            difficulty = rec.get("difficulty")
+
+        new_rec = {
+            "id": attempt_id,
+            "role": role,
+            "score": score,
+            "duration_min": duration_min,
+            "date": date_value,
+            "difficulty": difficulty,
+        }
+
+        try:
+            updated = Attempt(**new_rec)
+        except Exception:
+            # if something invalid, keep old record
+            try:
+                updated = Attempt(**rec)
+            except Exception:
+                updated = None
+            return rec
+
+        return updated.model_dump()
+
+    _rewrite_attempts_jsonl(transform)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Attempt not found")
+    return updated
 
 
-@app.delete("/attempts")
-def clear_attempts():
+# -------------------- Maintenance: Normalize attempts file --------------------
+@app.post("/attempts/normalize")
+def normalize_attempts():
+    """
+    One-time repair:
+      - reads all attempts (tolerant to array-lines/malformed items)
+      - re-writes the file as proper JSONL (one object per line)
+      - ensures 'date' is an ISO string
+    """
+    data = _read_attempts_jsonl(limit=10_000)  # newest first
     p = attempts_path()
-    try:
-        p.write_text("", encoding="utf-8")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to clear: {e}")
-    return {"ok": True}
+    tmp = p.with_suffix(".tmp")
+    written = 0
+
+    # write oldest first so natural append order is preserved
+    with tmp.open("w", encoding="utf-8") as fout:
+        for a in data[::-1]:
+            rec = a.model_dump()
+            # ensure date is always a string
+            if isinstance(rec.get("date"), datetime):
+                rec["date"] = a.date.isoformat()
+            try:
+                fout.write(json.dumps(rec, default=str) + "\n")
+                written += 1
+            except Exception:
+                continue
+
+    tmp.replace(p)
+    return {"ok": True, "rewritten": written, "file": str(p)}
 
 
-@app.get("/attempts/stats")
-def attempts_stats(limit: int = Query(1000, ge=1, le=10000)):
-    rows = _read_attempts_jsonl(limit=limit)
-    return _stats(rows)
-
-
-@app.post("/attempts/seed", response_model=Dict[str, int])
-def seed_attempts(
-    count: int = Query(10, ge=1, le=200),
-    role: Optional[str] = Query(None, description="If provided, seed only this role"),
-    seed: Optional[int] = Query(None),
-):
-    """Seed pseudo-random attempts for quick demos."""
-    if role and role not in QUESTIONS:
-        raise HTTPException(status_code=400, detail="Unknown role")
-
-    rng = random.Random(seed)
-    roles = [role] if role else sorted(QUESTIONS.keys()) or ["Frontend Developer"]
-
-    now = datetime.utcnow()
-    mins = [15, 20, 22, 25, 18, 30]
-    diffs = ["easy", "medium", "hard"]
-
-    added = 0
-    for i in range(count):
-        r = rng.choice(roles)
-        sc = rng.randint(35, 98)
-        dur = rng.choice(mins)
-        delta = rng.randint(0, 28)  # in last 4 weeks
-        dt = now - timedelta(days=delta, hours=rng.randint(0, 23))
-        d = rng.choice(diffs)
-        a = Attempt(
-            id=str(uuid.uuid4()),
-            role=r,
-            score=sc,
-            duration_min=dur,
-            date=dt,
-            difficulty=d,  # store difficulty for stacked charts
-        )
-        _append_attempt_jsonl(a)
-        added += 1
-
-    return {"inserted": added}
+# -------------------- internal helpers --------------------
+def _filtered_bank(role: str, difficulty: Optional[str]) -> List[Question]:
+    if role not in QUESTIONS:
+        raise HTTPException(status_code=404, detail="Unknown role")
+    bank = QUESTIONS[role]
+    if difficulty:
+        d = difficulty.lower()
+        bank = [q for q in bank if (q.difficulty or "").lower() == d]
+    return bank

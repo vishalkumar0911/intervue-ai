@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { TrendingUp, Clock, Target, Plus, Download, RotateCcw, ChevronLeft, ChevronRight } from "lucide-react";
+import { TrendingUp, Clock, Target, Plus, Download, RotateCcw, ChevronLeft, ChevronRight, Trash2 } from "lucide-react";
 import { Card } from "@/components/Card";
 import { api, type Attempt, type AttemptCreate } from "@/lib/api";
 
@@ -67,7 +67,7 @@ function ListSkeleton() {
   );
 }
 
-/* ---------- tiny UI bits (local) ---------- */
+/* ---------- tiny UI bits ---------- */
 
 function Chip({
   label,
@@ -117,6 +117,41 @@ function DateInput({
         className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-white outline-none focus:border-brand-400/50"
       />
     </label>
+  );
+}
+
+/* ----------- inline sparkline (pure SVG) ----------- */
+
+function Sparkline({ values, width = 84, height = 28, stroke = "url(#sparkGrad)" }: { values: number[]; width?: number; height?: number; stroke?: string }) {
+  const n = values.length;
+  if (n < 2) {
+    return <svg width={width} height={height} aria-hidden />;
+  }
+  const min = 0;
+  const max = 100;
+  const dx = width / (n - 1);
+  const points = values.map((v, i) => {
+    const x = i * dx;
+    const y = height - ((v - min) / (max - min)) * height;
+    return `${x},${Math.max(0, Math.min(height, y))}`;
+  });
+  return (
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="-mr-1">
+      <defs>
+        <linearGradient id="sparkGrad" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stopColor="#6366f1" />
+          <stop offset="100%" stopColor="#22d3ee" />
+        </linearGradient>
+      </defs>
+      <polyline
+        fill="none"
+        stroke={stroke}
+        strokeWidth="2"
+        points={points.join(" ")}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+    </svg>
   );
 }
 
@@ -179,9 +214,8 @@ export default function DashboardPage() {
     setLoading(true);
     setErr(null);
     try {
-      const data = await api.getAttempts({ limit: 400 }); // more depth if needed
-      setAttempts(data.sort((a, b) => +new Date(b.date) - +new Date(a.date))); // newest first
-      // roles for seed dropdown
+      const data = await api.getAttempts({ limit: 400 });
+      setAttempts(data.sort((a, b) => +new Date(b.date) - +new Date(a.date)));
       const rs = await api.roles();
       setRolesFromApi(rs);
       setSeedRole((prev) => (prev || rs[0] || ""));
@@ -210,7 +244,7 @@ export default function DashboardPage() {
     });
   }, [attempts, selectedRoles, from, to]);
 
-  // derive metrics
+  // KPIs
   const avg = useMemo(() => {
     if (!filtered.length) return 0;
     return Math.round(filtered.reduce((a, b) => a + b.score, 0) / filtered.length);
@@ -221,19 +255,22 @@ export default function DashboardPage() {
     [filtered]
   );
 
-  // per-role summary
+  // per-role summary + sparkline data
   const perRole = useMemo(() => {
-    const map = new Map<string, { sum: number; n: number }>();
-    for (const a of filtered) {
-      const cur = map.get(a.role) ?? { sum: 0, n: 0 };
+    const map = new Map<string, { sum: number; n: number; scores: number[] }>();
+    for (const a of filtered.slice().reverse()) {
+      const cur = map.get(a.role) ?? { sum: 0, n: 0, scores: [] };
       cur.sum += a.score;
       cur.n += 1;
+      // collect up to 12 most recent scores (we reversed to ascend by date)
+      if (cur.scores.length < 12) cur.scores.push(a.score);
       map.set(a.role, cur);
     }
     const rows = Array.from(map.entries()).map(([role, v]) => ({
       role,
       avg: Math.round(v.sum / v.n),
       sessions: v.n,
+      spark: v.scores, // already chronological
     }));
     rows.sort((a, b) => b.sessions - a.sessions);
     return rows;
@@ -254,8 +291,8 @@ export default function DashboardPage() {
     const diff = seedDifficulty || undefined;
     const sample: AttemptCreate = {
       role: r,
-      score: 60 + Math.floor(Math.random() * 41), // 60–100
-      duration_min: 12 + Math.floor(Math.random() * 18), // 12–29
+      score: 60 + Math.floor(Math.random() * 41),
+      duration_min: 12 + Math.floor(Math.random() * 18),
       difficulty: diff,
     };
     try {
@@ -263,6 +300,19 @@ export default function DashboardPage() {
       await load();
     } catch (e: any) {
       setErr(e?.message || "Failed to create attempt");
+    }
+  }
+
+  // delete attempt
+  async function onDelete(id: string) {
+    const ok = window.confirm("Delete this attempt?");
+    if (!ok) return;
+    try {
+      await api.deleteAttempt(id);
+      // optimistically update UI
+      setAttempts((old) => old.filter((a) => a.id !== id));
+    } catch (e: any) {
+      setErr(e?.message || "Delete failed");
     }
   }
 
@@ -287,7 +337,7 @@ export default function DashboardPage() {
     setPage(1);
   }
   function selectAllRoles() {
-    setSelectedRoles([]); // empty = All
+    setSelectedRoles([]);
     setPage(1);
   }
 
@@ -309,7 +359,9 @@ export default function DashboardPage() {
       a.duration_min ?? "",
       (a as any).difficulty ?? "",
     ]);
-    const csv = [header, ...rows].map((r) => r.map((x) => `"${String(x).replaceAll('"', '""')}"`).join(",")).join("\n");
+    const csv = [header, ...rows]
+      .map((r) => r.map((x) => `"${String(x).replaceAll('"', '""')}"`).join(","))
+      .join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -394,7 +446,7 @@ export default function DashboardPage() {
               label={r}
               active={selectedRoles.length ? selectedRoles.includes(r) : true}
               onClick={() => {
-                if (!selectedRoles.length) setSelectedRoles([r]); // start from this role
+                if (!selectedRoles.length) setSelectedRoles([r]);
                 else toggleRole(r);
               }}
             />
@@ -495,7 +547,7 @@ export default function DashboardPage() {
         )}
       </section>
 
-      {/* Per-role summary */}
+      {/* Per-role summary with sparklines */}
       {!loading && perRole.length > 0 && (
         <section>
           <h3 className="mb-2 text-sm text-white/60">Summary by role</h3>
@@ -505,7 +557,10 @@ export default function DashboardPage() {
                 key={r.role}
                 className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3"
               >
-                <div className="truncate text-sm font-medium">{r.role}</div>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="truncate text-sm font-medium">{r.role}</div>
+                  <Sparkline values={r.spark} />
+                </div>
                 <div className="mt-2 flex items-center justify-between">
                   <div className="text-xs text-white/60">Avg</div>
                   <div className="text-right text-lg font-semibold">{r.avg}</div>
@@ -575,8 +630,7 @@ export default function DashboardPage() {
                   <p className="truncate font-medium">{a.role}</p>
                   <p className="text-xs text-white/60">{fmtDate(a.date)}</p>
                 </div>
-                <div className="flex items-center gap-6">
-                  {/* difficulty badge when present */}
+                <div className="flex items-center gap-4 sm:gap-6">
                   {(a as any).difficulty && (
                     <span
                       className={[
@@ -590,6 +644,13 @@ export default function DashboardPage() {
                   )}
                   <span className="text-sm text-white/70">{a.duration_min} min</span>
                   <span className={`text-xl font-bold ${scoreClass(a.score)}`}>{a.score}</span>
+                  <button
+                    onClick={() => onDelete(a.id)}
+                    className="ml-1 inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
+                    title="Delete"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
                 </div>
               </div>
             ))}
