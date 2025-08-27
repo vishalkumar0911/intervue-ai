@@ -1,3 +1,4 @@
+// src/lib/api.ts
 export type Question = {
   id: string;
   role: string;
@@ -11,72 +12,36 @@ export type Attempt = {
   role: string;
   score: number;
   duration_min: number;
-  date: string; // ISO string
+  date: string; // ISO
+  difficulty?: "easy" | "medium" | "hard" | null;
 };
 
 export type AttemptCreate = {
   role: string;
-  score: number;         // 0..100
-  duration_min: number;  // minutes
-  date?: string;         // optional; server will set if omitted
+  score: number;
+  duration_min: number;
+  date?: string; // optional; server sets if missing
+  difficulty?: "easy" | "medium" | "hard";
 };
 
-// ---------- Config ----------
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
-const DEFAULT_TIMEOUT_MS = 15000;
+export type AttemptUpdate = Partial<AttemptCreate>;
 
-// ---------- Utils ----------
-function qs(params: Record<string, string | undefined>) {
-  const p = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined && v !== "") p.set(k, v);
-  }
-  return p.toString();
-}
+type Stats = {
+  total: number;
+  roles: Array<{ role: string; count: number; avg: number }>;
+  last_7d: { count: number; avg: number };
+};
 
-async function withTimeout<T>(promise: Promise<T>, ms = DEFAULT_TIMEOUT_MS): Promise<T> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort("timeout"), ms);
-  try {
-    // @ts-expect-error we pass controller from callers
-    return await promise(ctrl.signal);
-  } finally {
-    clearTimeout(timer);
-  }
-}
+export type Health = {
+  ok: boolean;
+  roles: string[];
+  counts: Record<string, number>;
+  questions_file: string;
+  attempts_file: string;
+  last_questions_load_ts: number;
+  server_time: number;
+};
 
-async function safeGet<T>(path: string): Promise<T> {
-  return withTimeout<T>(
-    (signal: AbortSignal) =>
-      fetch(`${API_BASE}${path}`, { cache: "no-store", signal }).then(async (res) => {
-        if (!res.ok) {
-          const text = await res.text().catch(() => "");
-          throw new Error(`GET ${path} → ${res.status} ${text}`);
-        }
-        return res.json();
-      })
-  );
-}
-
-async function safePost<T>(path: string, body: unknown): Promise<T> {
-  return withTimeout<T>(
-    (signal: AbortSignal) =>
-      fetch(`${API_BASE}${path}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-        signal,
-      }).then(async (res) => {
-        if (!res.ok) {
-          const text = await res.text().catch(() => "");
-          throw new Error(`POST ${path} → ${res.status} ${text}`);
-        }
-        return res.json();
-      })
-  );
-}
-
-// ---------- API ----------
 type QuestionsParams = {
   role: string;
   limit?: number;
@@ -86,75 +51,215 @@ type QuestionsParams = {
   seed?: number;
 };
 
+/* ---------------- base + helpers ---------------- */
+
+const rawBase = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+const API_BASE = rawBase.replace(/\/+$/, ""); // ensure no trailing slash
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY;
+
+// Global defaults
+const DEFAULT_TIMEOUT = 12_000;
+const DEFAULT_RETRY = 1;
+
+/** Attach API key header for mutating requests. */
+function authHeaders() {
+  return API_KEY ? { "x-api-key": API_KEY } : {};
+}
+
+/** Build a querystring without empty values. */
+function qs(params: Record<string, string | undefined>) {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== "") p.set(k, v);
+  }
+  return p.toString();
+}
+
+/** Abortable fetch with timeout. */
+function fetchWithTimeout(url: string, opts: RequestInit = {}, timeoutMs = DEFAULT_TIMEOUT) {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), timeoutMs);
+  return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(id));
+}
+
+/** Parse FastAPI error (string or JSON) into a friendly Error. */
+async function toError(res: Response): Promise<Error> {
+  let msg = `Request failed: ${res.status}`;
+  try {
+    const text = await res.text();
+    try {
+      const j = JSON.parse(text);
+      if (j?.detail) {
+        msg = Array.isArray(j.detail) ? j.detail[0]?.msg || msg : j.detail;
+      } else {
+        msg = text || msg;
+      }
+    } catch {
+      msg = text || msg;
+    }
+  } catch {}
+  return new Error(msg);
+}
+
+/** Unified request helper. Handles JSON body, query, auth, retry for GET. */
+async function request<T>(
+  path: string,
+  {
+    method = "GET",
+    query,
+    body,
+    headers = {},
+    timeout = DEFAULT_TIMEOUT,
+    auth = false,
+    retry = method === "GET" ? DEFAULT_RETRY : 0,
+    cache = "no-store" as RequestCache,
+  }: {
+    method?: "GET" | "POST" | "PATCH" | "DELETE";
+    query?: Record<string, string | undefined>;
+    body?: any;
+    headers?: Record<string, string>;
+    timeout?: number;
+    auth?: boolean; // attach API key
+    retry?: number;
+    cache?: RequestCache;
+  } = {},
+): Promise<T> {
+  const url = new URL(API_BASE + path);
+  if (query) {
+    for (const [k, v] of Object.entries(query)) {
+      if (v !== undefined && v !== "") url.searchParams.set(k, v);
+    }
+  }
+
+  const init: RequestInit = {
+    method,
+    headers: {
+      ...(auth ? authHeaders() : {}),
+      ...headers,
+    },
+    cache,
+  };
+  if (body !== undefined) {
+    init.headers = {
+      "Content-Type": "application/json",
+      ...(init.headers || {}),
+    };
+    init.body = JSON.stringify(body);
+  }
+
+  let attempt = 0;
+  while (true) {
+    attempt++;
+    const res = await fetchWithTimeout(url.toString(), init, timeout);
+    if (res.ok) {
+      // CSV export will be handled separately using fetch directly
+      return (await res.json()) as T;
+    }
+    // Only retry on network-ish failures or 5xx
+    if (attempt <= retry && (res.status >= 500 || res.status === 0)) {
+      await new Promise((r) => setTimeout(r, 200 * attempt)); // small backoff
+      continue;
+    }
+    throw await toError(res);
+  }
+}
+
+/* ---------------- Small in-memory cache for roles ---------------- */
+let rolesCache: { data: string[]; ts: number } | null = null;
+const ROLES_TTL = 5 * 60_000; // 5 minutes
+
+async function getCachedRoles(): Promise<string[]> {
+  const now = Date.now();
+  if (rolesCache && now - rolesCache.ts < ROLES_TTL) {
+    return rolesCache.data;
+  }
+  const data = await request<string[]>("/roles");
+  rolesCache = { data, ts: now };
+  return data;
+}
+
+/* ---------------- API ---------------- */
+
 export const api = {
-  // Health (useful for local debugging)
-  health: () => safeGet<{
-    ok: boolean;
-    roles: string[];
-    counts: Record<string, number>;
-    questions_file: string;
-    attempts_file?: string;
-    server_time: number;
-  }>("/health"),
+  /* ---- health & stats (optional) ---- */
+  health: () => request<Health>("/health"),
+  stats: () => request<Stats>("/stats"),
 
-  // Roles & Questions
-  roles: () => safeGet<string[]>("/roles"),
+  /* ---- roles & questions ---- */
+  roles: () => getCachedRoles(),
 
-  questions: ({ role, limit = 20, offset = 0, difficulty, shuffle, seed }: QuestionsParams) => {
-    const query = qs({
-      role,
-      limit: String(limit),
-      offset: String(offset),
-      difficulty,
-      shuffle: shuffle ? "true" : undefined,
-      seed: seed !== undefined ? String(seed) : undefined,
-    });
-    return safeGet<Question[]>(`/questions?${query}`);
+  questions: ({ role, limit = 20, offset = 0, difficulty, shuffle, seed }: QuestionsParams) =>
+    request<Question[]>("/questions", {
+      query: {
+        role,
+        limit: String(limit),
+        offset: String(offset),
+        difficulty,
+        shuffle: shuffle ? "true" : undefined,
+        seed: seed !== undefined ? String(seed) : undefined,
+      },
+    }),
+
+  nextQuestion: (role: string, index = 0, difficulty?: "easy" | "medium" | "hard") =>
+    request<Question>("/question/next", {
+      query: { role, index: String(index), difficulty },
+    }),
+
+  randomQuestion: (role: string, difficulty?: "easy" | "medium" | "hard", seed?: number) =>
+    request<Question>("/questions/random", {
+      query: {
+        role,
+        difficulty,
+        seed: seed !== undefined ? String(seed) : undefined,
+      },
+    }),
+
+  searchQuestions: (q: string, role?: string, limit = 20) =>
+    request<Question[]>("/search", {
+      query: { q, role, limit: String(limit) },
+    }),
+
+  /* ---- attempts ---- */
+  getAttempts: ({ role, limit = 100 }: { role?: string; limit?: number } = {}) =>
+    request<Attempt[]>("/attempts", {
+      query: { role, limit: String(limit) },
+    }),
+
+  getAttempt: (id: string) => request<Attempt>(`/attempts/${id}`),
+
+  createAttempt: (a: AttemptCreate) =>
+    request<Attempt>("/attempts", {
+      method: "POST",
+      body: a,
+      auth: true,
+    }),
+
+  updateAttempt: (id: string, patch: AttemptUpdate) =>
+    request<Attempt>(`/attempts/${id}`, {
+      method: "PATCH",
+      body: patch,
+      auth: true,
+    }),
+
+  deleteAttempt: (id: string) =>
+    request<{ ok: boolean; deleted: number; id: string }>(`/attempts/${id}`, {
+      method: "DELETE",
+      auth: true,
+    }),
+
+  /* ---- Export CSV (download helper) ---- */
+  exportCSV: async ({ role }: { role?: string } = {}) => {
+    const query = role ? `?role=${encodeURIComponent(role)}` : "";
+    const res = await fetchWithTimeout(`${API_BASE}/attempts/export${query}`, {}, DEFAULT_TIMEOUT);
+    if (!res.ok) throw await toError(res);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "attempts.csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   },
-
-  nextQuestion: (role: string, index = 0, difficulty?: "easy" | "medium" | "hard") => {
-    const query = qs({ role, index: String(index), difficulty });
-    return safeGet<Question>(`/question/next?${query}`);
-  },
-
-  randomQuestion: (role: string, difficulty?: "easy" | "medium" | "hard", seed?: number) => {
-    const query = qs({
-      role,
-      difficulty,
-      seed: seed !== undefined ? String(seed) : undefined,
-    });
-    return safeGet<Question>(`/questions/random?${query}`);
-  },
-
-  search: (q: string, opts?: { role?: string; limit?: number }) => {
-    const query = qs({
-      q,
-      role: opts?.role,
-      limit: opts?.limit ? String(opts.limit) : undefined,
-    });
-    return safeGet<Question>(`/search?${query}`);
-  },
-
-  // Attempts
-  getAttempts: (params?: { role?: string; limit?: number }) => {
-    const query = qs({
-      role: params?.role,
-      limit: params?.limit ? String(params.limit) : undefined,
-    });
-    const path = query ? `/attempts?${query}` : "/attempts";
-    return safeGet<Attempt[]>(path);
-  },
-
-  createAttempt: (payload: AttemptCreate) => {
-    return safePost<Attempt>("/attempts", payload);
-  },
-
-  exportAttemptsCSV: () => `${API_BASE}/attempts/export.csv`,
-  exportAttemptsJSON: () => `${API_BASE}/attempts/export.json`,
-  clearAttempts: async () => {
-    const res = await fetch(`${API_BASE}/attempts`, { method: "DELETE" });
-    if (!res.ok) throw new Error("Failed to clear attempts");
-    return true;
-  },
-  
 };
