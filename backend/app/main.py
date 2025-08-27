@@ -1,42 +1,47 @@
+# backend/app/main.py
 from __future__ import annotations
-from fastapi.responses import StreamingResponse
-import io, csv
 
-
+import csv
+import hashlib
+import io
+import json
+import random
+import time
+import uuid
+from collections import defaultdict, deque
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Optional, Any, Callable
-import json, random, time, uuid, hashlib
-from collections import defaultdict, deque
+from typing import Any, Callable, Dict, List, Optional
+from uuid import UUID
 
 from fastapi import (
+    Body,
+    Depends,
     FastAPI,
     HTTPException,
     Query,
-    Body,
     Request,
     Response,
-    Depends,
     status,
 )
-from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.encoders import jsonable_encoder
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field, ValidationError
 from pydantic_settings import BaseSettings
+from starlette.middleware.gzip import GZipMiddleware
 
 
 # -------------------- Settings --------------------
 class Settings(BaseSettings):
     BACKEND_CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
-    QUESTIONS_FILE: str = ""    # optional override
-    ATTEMPTS_FILE: str = ""     # optional override (defaults to data/attempts.jsonl)
+    QUESTIONS_FILE: str = ""  # optional override
+    ATTEMPTS_FILE: str = ""  # optional override (defaults to data/attempts.jsonl)
     BACKEND_API_KEY: Optional[str] = None  # optional API key for mutating endpoints
 
     # Rate limit knobs (per IP)
-    RL_READ_RATE: int = 60      # requests / minute
-    RL_MUTATE_RATE: int = 20    # requests / minute
+    RL_READ_RATE: int = 60  # requests / minute
+    RL_MUTATE_RATE: int = 20  # requests / minute
 
     class Config:
         env_file = ".env"
@@ -182,6 +187,7 @@ def require_api_key(request: Request):
 _ip_hits_read: dict[str, deque[float]] = defaultdict(deque)
 _ip_hits_mutate: dict[str, deque[float]] = defaultdict(deque)
 
+
 def _rate_limit(request: Request, bucket: dict[str, deque[float]], rate: int, window: float = 60.0):
     ip = request.client.host if request.client else "unknown"
     now = time.time()
@@ -193,8 +199,10 @@ def _rate_limit(request: Request, bucket: dict[str, deque[float]], rate: int, wi
         raise HTTPException(status_code=429, detail="Too many requests")
     dq.append(now)
 
+
 def rl_read_dep(request: Request):
     _rate_limit(request, _ip_hits_read, settings.RL_READ_RATE)
+
 
 def rl_mutate_dep(request: Request):
     _rate_limit(request, _ip_hits_mutate, settings.RL_MUTATE_RATE)
@@ -286,6 +294,7 @@ async def on_validation_error(_: Request, exc: ValidationError):
         content={"detail": exc.errors(), "message": "Validation failed"},
     )
 
+
 @app.exception_handler(Exception)
 async def on_unhandled(_: Request, exc: Exception):
     # Let HTTPException bubble via default handler; otherwise return 500
@@ -325,6 +334,7 @@ def roles(request: Request):
     data = sorted(QUESTIONS.keys())
     return _etag_json(request, data, max_age=60)
 
+
 @app.get(
     "/questions",
     response_model=List[Question],
@@ -355,6 +365,7 @@ def list_questions(
     # ETag aids client caching of the bank slice
     return _etag_json(request, bank[offset:end], max_age=30)
 
+
 @app.get("/question/next", response_model=Question, tags=["questions"], dependencies=[Depends(rl_read_dep)])
 def next_question(
     role: str,
@@ -367,6 +378,7 @@ def next_question(
     if not bank:
         raise HTTPException(status_code=404, detail="No questions for role/difficulty")
     return bank[index % len(bank)]
+
 
 @app.get("/questions/random", response_model=Question, tags=["questions"], dependencies=[Depends(rl_read_dep)])
 def random_question(
@@ -416,13 +428,52 @@ def get_attempts(
     """Return most recent attempts (newest first)."""
     return _read_attempts_jsonl(limit=limit, role=role)
 
+
+# Put export BEFORE dynamic routes to avoid shadowing.
+@app.get("/attempts/export", tags=["attempts"], dependencies=[Depends(rl_read_dep)])
+def export_attempts(role: Optional[str] = Query(None)):
+    """
+    Stream a CSV export of attempts (optionally filtered by ?role=…).
+    Columns: id,role,score,duration_min,date,difficulty
+    """
+    items = _read_attempts_jsonl(limit=10_000, role=role)
+
+    def iter_csv():
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["id", "role", "score", "duration_min", "date", "difficulty"])
+        yield output.getvalue()
+        output.seek(0)
+        output.truncate(0)
+
+        for it in items:
+            writer.writerow(
+                [
+                    it.id,
+                    it.role,
+                    it.score,
+                    it.duration_min,
+                    it.date.isoformat() if hasattr(it.date, "isoformat") else str(it.date),
+                    it.difficulty or "",
+                ]
+            )
+            yield output.getvalue()
+            output.seek(0)
+            output.truncate(0)
+
+    headers = {"Content-Disposition": 'attachment; filename="attempts.csv"'}
+    return StreamingResponse(iter_csv(), media_type="text/csv", headers=headers)
+
+
 @app.get("/attempts/{attempt_id}", response_model=Attempt, tags=["attempts"], dependencies=[Depends(rl_read_dep)])
-def get_attempt_by_id(attempt_id: str):
+def get_attempt_by_id(attempt_id: UUID):
+    aid = str(attempt_id)
     items = _read_attempts_jsonl(limit=10_000)
     for a in items:
-        if a.id == attempt_id:
+        if a.id == aid:
             return a
     raise HTTPException(status_code=404, detail="Attempt not found")
+
 
 @app.post(
     "/attempts",
@@ -451,19 +502,20 @@ def add_attempt(payload: AttemptCreate = Body(...)):
         raise HTTPException(status_code=500, detail=f"Failed to save attempt: {e}")
     return attempt
 
+
 @app.delete(
     "/attempts/{attempt_id}",
     tags=["attempts"],
     dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)],
 )
-def delete_attempt(attempt_id: str):
+def delete_attempt(attempt_id: UUID):
     """Delete an attempt by id."""
+    aid = str(attempt_id)
     found = False
 
     def transform(rec: dict):
         nonlocal found
-        # some corrupt lines or arrays might sneak in; protect access
-        if isinstance(rec, dict) and rec.get("id") == attempt_id:
+        if isinstance(rec, dict) and rec.get("id") == aid:
             found = True
             return None
         return rec
@@ -471,7 +523,8 @@ def delete_attempt(attempt_id: str):
     _rewrite_attempts_jsonl(transform)
     if not found:
         raise HTTPException(status_code=404, detail="Attempt not found")
-    return {"ok": True, "deleted": 1, "id": attempt_id}
+    return {"ok": True, "deleted": 1, "id": aid}
+
 
 @app.patch(
     "/attempts/{attempt_id}",
@@ -479,28 +532,27 @@ def delete_attempt(attempt_id: str):
     tags=["attempts"],
     dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)],
 )
-def update_attempt(attempt_id: str, patch: AttemptUpdate):
+def update_attempt(attempt_id: UUID, patch: AttemptUpdate):
     """Patch fields of an attempt; ignores invalid field values gracefully."""
+    aid = str(attempt_id)
     updated: Optional[Attempt] = None
 
     def transform(rec: dict):
         nonlocal updated
-        if not isinstance(rec, dict) or rec.get("id") != attempt_id:
+        if not isinstance(rec, dict) or rec.get("id") != aid:
             return rec
         role = patch.role if patch.role is not None else rec.get("role")
         if role not in QUESTIONS:
             role = rec.get("role")
         score = patch.score if patch.score is not None else rec.get("score")
         duration_min = patch.duration_min if patch.duration_min is not None else rec.get("duration_min")
-        date = (
-            patch.date.isoformat() if isinstance(patch.date, datetime) else patch.date
-        ) if patch.date is not None else rec.get("date")
+        date = (patch.date.isoformat() if hasattr(patch.date, "isoformat") else patch.date) if patch.date is not None else rec.get("date")
         difficulty = patch.difficulty if patch.difficulty is not None else rec.get("difficulty")
         if difficulty and difficulty not in {"easy", "medium", "hard"}:
             difficulty = rec.get("difficulty")
 
         new_rec = {
-            "id": attempt_id,
+            "id": aid,
             "role": role,
             "score": score,
             "duration_min": duration_min,
@@ -518,36 +570,6 @@ def update_attempt(attempt_id: str, patch: AttemptUpdate):
     if not updated:
         raise HTTPException(status_code=404, detail="Attempt not found")
     return updated
-
-@app.get("/attempts/export")
-def export_attempts(role: Optional[str] = Query(None)):
-    """
-    Stream a CSV export of attempts (optionally filtered by ?role=…).
-    Columns: id,role,score,duration_min,date,difficulty
-    """
-    items = _read_attempts_jsonl(limit=10_000, role=role)
-    def iter_csv():
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(["id", "role", "score", "duration_min", "date", "difficulty"])
-        yield output.getvalue()
-        output.seek(0); output.truncate(0)
-
-        for it in items:
-            writer.writerow([
-                it.id,
-                it.role,
-                it.score,
-                it.duration_min,
-                # Ensure ISO string
-                it.date.isoformat() if hasattr(it.date, "isoformat") else str(it.date),
-                it.difficulty or "",
-            ])
-            yield output.getvalue()
-            output.seek(0); output.truncate(0)
-
-    headers = {"Content-Disposition": 'attachment; filename="attempts.csv"'}
-    return StreamingResponse(iter_csv(), media_type="text/csv", headers=headers)
 
 
 # -------------------- Stats --------------------

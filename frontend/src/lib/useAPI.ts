@@ -1,23 +1,24 @@
 // src/lib/useApi.ts
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-type Key = (string | number | null | undefined)[];
+type KeyPart = string | number | null | undefined;
+type Key = KeyPart[];
 type Fetcher<T> = () => Promise<T>;
 
-type Options = {
+type Options<T> = {
   refreshInterval?: number;
   revalidateOnFocus?: boolean;
   dedupeMs?: number;
-  initialData?: any;
+  initialData?: T;
 };
 
 type CacheEntry<T> = {
   data?: T;
   error?: Error | null;
   ts: number;
-  inflight?: Promise<T>;
+  inflight?: Promise<void>;
 };
 
 const cache = new Map<string, CacheEntry<any>>();
@@ -26,26 +27,32 @@ function keyToString(key: Key): string {
   return JSON.stringify(key ?? []);
 }
 
-export function useApi<T>(key: Key, fetcher: Fetcher<T>, opts: Options = {}) {
-  const { refreshInterval, revalidateOnFocus = true, dedupeMs = 200, initialData } = opts;
+export function useApi<T>(key: Key, fetcher: Fetcher<T>, opts: Options<T> = {}) {
+  const {
+    refreshInterval,
+    revalidateOnFocus = true,
+    dedupeMs = 200,
+    initialData,
+  } = opts;
 
   const k = useMemo(() => keyToString(key), [key]);
-  const mounted = useRef(true);
+  const mountedRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
 
-  // hydrate local state from cache/initialData
-  const entry = cache.get(k) ?? { ts: 0 };
-  if (!cache.has(k)) cache.set(k, entry);
-  const [data, setData] = useState<T | undefined>(initialData ?? entry.data);
+  // ensure cache entry exists
+  if (!cache.has(k)) cache.set(k, { ts: 0 });
+
+  const entry = cache.get(k)!;
+  const [data, setDataState] = useState<T | undefined>(initialData ?? entry.data);
   const [error, setError] = useState<Error | null>(entry.error ?? null);
-  const [loading, setLoading] = useState<boolean>(!entry.data && !initialData);
+  const [loading, setLoading] = useState<boolean>(!entry.data && initialData === undefined);
 
-  const doFetch = async () => {
+  const doFetch = useCallback(async () => {
     const now = Date.now();
-    const current = cache.get(k)!;
+    const ce = cache.get(k)!;
 
-    if (current.inflight) return current.inflight;
-    if (current.ts && now - current.ts < dedupeMs) return current.data as T;
+    if (ce.inflight) return ce.inflight;          // already fetching
+    if (ce.ts && now - ce.ts < dedupeMs) return;  // within dedupe window
 
     const ctrl = new AbortController();
     abortRef.current?.abort();
@@ -54,87 +61,87 @@ export function useApi<T>(key: Key, fetcher: Fetcher<T>, opts: Options = {}) {
     const p = (async () => {
       try {
         const res = await fetcher();
-        if (!mounted.current) return res;
+        if (!mountedRef.current) return;
         cache.set(k, { data: res, error: null, ts: Date.now() });
-        setData(res);
+        setDataState(res);
         setError(null);
         setLoading(false);
-        return res;
       } catch (e: any) {
-        if (!mounted.current) throw e;
-        const err = e?.name === "AbortError" ? null : e;
-        if (err) {
-          cache.set(k, { ...(cache.get(k) ?? { ts: 0 }), error: err, ts: Date.now() });
-          setError(err);
+        if (!mountedRef.current) return;
+        if (e?.name !== "AbortError") {
+          setError(e instanceof Error ? e : new Error(String(e)));
+          const prev = cache.get(k) ?? { ts: 0 };
+          cache.set(k, { ...prev, error: e, ts: Date.now() });
           setLoading(false);
         }
-        throw e;
       } finally {
-        const ce = cache.get(k);
-        if (ce) ce.inflight = undefined;
+        const cur = cache.get(k);
+        if (cur) cur.inflight = undefined;
         if (abortRef.current === ctrl) abortRef.current = null;
       }
     })();
 
-    current.inflight = p as Promise<T>;
-    cache.set(k, current);
+    ce.inflight = p;
+    cache.set(k, ce);
     return p;
-  };
+  }, [fetcher, dedupeMs, k]);
 
+  // initial + key change
   useEffect(() => {
-    mounted.current = true;
+    mountedRef.current = true;
     if (initialData !== undefined) {
       setLoading(false);
     } else {
-      setLoading(!data);
-      doFetch().catch(() => {});
+      setLoading(!entry.data);
+      void doFetch();
     }
     return () => {
-      mounted.current = false;
+      mountedRef.current = false;
       abortRef.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [k]);
 
+  // polling
   useEffect(() => {
     if (!refreshInterval) return;
-    const id = setInterval(() => {
-      doFetch().catch(() => {});
-    }, Math.max(500, refreshInterval));
+    const id = setInterval(() => void doFetch(), Math.max(500, refreshInterval));
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [k, refreshInterval]);
+  }, [refreshInterval, doFetch]);
 
+  // revalidate on focus/visibility
   useEffect(() => {
     if (!revalidateOnFocus) return;
-    const onFocus = () => doFetch().catch(() => {});
+    const onFocus = () => void doFetch();
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onFocus);
     return () => {
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onFocus);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [k, revalidateOnFocus]);
+  }, [revalidateOnFocus, doFetch]);
 
-  async function mutate(
-    updater: T | ((prev: T | undefined) => T | undefined),
-    opts?: { revalidate?: boolean }
-  ) {
-    const next =
-      typeof updater === "function" ? (updater as any)(cache.get(k)?.data) : updater;
-    cache.set(k, { ...(cache.get(k) ?? { ts: 0 }), data: next, error: null, ts: Date.now() });
-    setData(next);
-    setError(null);
-    if (opts?.revalidate) {
-      setLoading(true);
-      try {
-        await doFetch();
-      } finally {
-        setLoading(false);
+  // mutate + setData alias (SWR-like)
+  const mutate = useCallback(
+    (updater: T | ((prev: T | undefined) => T | undefined), options?: { revalidate?: boolean }) => {
+      setDataState((prev) => {
+        const next = typeof updater === "function" ? (updater as any)(prev) : (updater as T);
+        cache.set(k, { ...(cache.get(k) ?? { ts: 0 }), data: next, error: null, ts: Date.now() });
+        return next;
+      });
+      setError(null);
+      if (options?.revalidate) {
+        setLoading(true);
+        void doFetch().finally(() => setLoading(false));
       }
-    }
-  }
+    },
+    [k, doFetch]
+  );
 
-  return { data, error, loading, refetch: doFetch, mutate };
+  // Back-compat with code expecting `setData`
+  const setData = mutate;
+
+  return { data, error, loading, refetch: doFetch, mutate, setData };
 }
+
+export default useApi;

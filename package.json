@@ -1,17 +1,15 @@
 {
+  "private": true,
   "scripts": {
-    "api": ".\\backend\\.venv\\Scripts\\python.exe -m uvicorn app.main:app --reload --port 8000 --app-dir backend",
-    "web": "wait-on tcp:8000 && npm -C frontend run dev",
-    "dev": "concurrently -n API,WEB -c magenta,cyan \"npm:api\" \"npm:web\""
+    "api": "cd backend && .\\.venv\\Scripts\\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000",
+    "web": "wait-on tcp:8000 && npm --prefix frontend run dev",
+    "dev": "npx concurrently -n api,web -c green,cyan \"npm run api\" \"npm run web\"",
+    "build": "npm --prefix frontend run build",
+    "start": "npm --prefix frontend run start -- -p 3000",
+    "lint": "npm --prefix frontend run lint"
   },
   "devDependencies": {
-    "autoprefixer": "^10.4.21",
-    "concurrently": "^9",
-    "postcss": "^8.5.6",
-    "tailwindcss": "^3.4.17",
-    "wait-on": "^7"
-  },
-  "dependencies": {
-    "@radix-ui/react-select": "^2.2.6"
+    "concurrently": "^9.0.0",
+    "wait-on": "^7.0.1"
   }
 }

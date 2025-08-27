@@ -1,6 +1,7 @@
+// src/app/(app)/dashboard/page.tsx
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { TrendingUp, Clock, Target, Plus, Trash2, Download } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@/components/Card";
@@ -111,13 +112,15 @@ function DateInput({
 
 /* ---------- page ---------- */
 
+const SEED_PREFS_KEY = "dashboard:seedPrefs";
+
 export default function DashboardPage() {
   // Load attempts via SWR-like hook
   const {
     data: attempts = [],
     loading,
     error,
-    setData,       // local mutate
+    setData, // local mutate
     refetch,
   } = useApi<Attempt[]>(
     ["attempts", "dashboard"],
@@ -125,11 +128,22 @@ export default function DashboardPage() {
     { refreshInterval: 60_000, revalidateOnFocus: true, dedupeMs: 200 }
   );
 
+  // Load all roles (so the seed dropdown has options even if there are no attempts yet)
+  const [allRolesApi, setAllRolesApi] = useState<string[]>([]);
+  useEffect(() => {
+    api
+      .roles()
+      .then((r) => setAllRolesApi(r))
+      .catch(() => setAllRolesApi([]));
+  }, []);
+
   // filters
-  const allRoles = useMemo(
+  const allRolesFromData = useMemo(
     () => Array.from(new Set(attempts.map((a) => a.role))).sort(),
     [attempts]
   );
+  const allRoles = (allRolesApi.length ? allRolesApi : allRolesFromData).sort();
+
   const [selectedRoles, setSelectedRoles] = useState<string[]>([]); // empty = all
   const [from, setFrom] = useState<string>(""); // "YYYY-MM-DD"
   const [to, setTo] = useState<string>("");
@@ -161,30 +175,95 @@ export default function DashboardPage() {
     [filtered]
   );
 
-  // seed + optimistic deletion
+  // ---- By-role summary (based on filtered list) ----
+  const byRole = useMemo(() => {
+    const map = new Map<string, { count: number; totalScore: number; totalMin: number }>();
+    for (const a of filtered) {
+      const m = map.get(a.role) ?? { count: 0, totalScore: 0, totalMin: 0 };
+      m.count += 1;
+      m.totalScore += a.score;
+      m.totalMin += a.duration_min || 0;
+      map.set(a.role, m);
+    }
+    return Array.from(map.entries())
+      .map(([role, m]) => ({
+        role,
+        count: m.count,
+        minutes: m.totalMin,
+        avg: Math.round(m.totalScore / m.count),
+      }))
+      .sort((a, b) => a.role.localeCompare(b.role));
+  }, [filtered]);
+
+  // ---------------- Seed controls (with localStorage persistence) ----------------
+  const [seedRole, setSeedRole] = useState<string>("");
+  const [seedDifficulty, setSeedDifficulty] = useState<"" | "easy" | "medium" | "hard">("");
+
+  // hydrate from localStorage
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SEED_PREFS_KEY);
+      if (raw) {
+        const { role, difficulty } = JSON.parse(raw) as {
+          role?: string;
+          difficulty?: "" | "easy" | "medium" | "hard";
+        };
+        if (role) setSeedRole(role);
+        if (difficulty !== undefined) setSeedDifficulty(difficulty);
+      }
+    } catch {}
+  }, []);
+
+  // ensure chosen role exists; otherwise default to first available
+  useEffect(() => {
+    if (!allRoles.length) return;
+    if (!seedRole || !allRoles.includes(seedRole)) {
+      setSeedRole(allRoles[0]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allRoles.join("|")]); // join to avoid changing ref on same content
+
+  // persist to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        SEED_PREFS_KEY,
+        JSON.stringify({ role: seedRole, difficulty: seedDifficulty })
+      );
+    } catch {}
+  }, [seedRole, seedDifficulty]);
+
   async function seedOne() {
+    if (!seedRole) {
+      toast.error("Pick a role first");
+      return;
+    }
     const sample: AttemptCreate = {
-      role: "Frontend Developer", // adjust to match your /roles
+      role: seedRole,
       score: 60 + Math.floor(Math.random() * 41),
       duration_min: 12 + Math.floor(Math.random() * 18),
+      difficulty: seedDifficulty || undefined,
     };
     try {
       const created = await api.createAttempt(sample);
-      // Optimistically prepend
-      setData([created, ...attempts]);
-      toast.success("Sample attempt created");
+      setData([created, ...attempts]); // optimistic prepend
+      toast.success(`Sample created for ${seedRole}${seedDifficulty ? ` (${seedDifficulty})` : ""}`);
     } catch (e: any) {
       toast.error(e?.message || "Failed to create attempt");
     }
   }
 
   function exportCSV() {
-    api.exportCSV({ data: filtered, filename: "dashboard_attempts" });
+    // If exactly one role is selected, export just that role
+    const oneRole = selectedRoles.length === 1 ? selectedRoles[0] : undefined;
+    api.exportCSV({ role: oneRole }).catch(async (e: any) => {
+      toast.error(e?.message || "Export failed");
+    });
   }
 
   async function deleteWithUndo(a: Attempt) {
     // Optimistically remove
-    setData((prev) => prev.filter((x) => x.id !== a.id));
+    setData((prev) => prev?.filter((x) => x.id !== a.id) ?? []);
 
     const timer = setTimeout(async () => {
       try {
@@ -202,7 +281,7 @@ export default function DashboardPage() {
         onClick: () => {
           clearTimeout(timer);
           setData((prev) =>
-            [a, ...prev].sort((x, y) => +new Date(y.date) - +new Date(x.date))
+            prev ? [a, ...(prev as Attempt[])].sort((x, y) => +new Date(y.date) - +new Date(x.date)) : [a]
           );
         },
       },
@@ -222,9 +301,7 @@ export default function DashboardPage() {
     setTo("");
   }
   function toggleRole(r: string) {
-    setSelectedRoles((prev) =>
-      prev.includes(r) ? prev.filter((x) => x !== r) : [...prev, r]
-    );
+    setSelectedRoles((prev) => (prev.includes(r) ? prev.filter((x) => x !== r) : [...prev, r]));
   }
   function selectAllRoles() {
     setSelectedRoles([]); // empty = All
@@ -235,7 +312,6 @@ export default function DashboardPage() {
       {/* Header + Seed + Export */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          {/* brighter, larger title with subtle glow */}
           <h1 className="text-3xl md:text-4xl font-semibold tracking-tight">
             <span className="bg-gradient-to-r from-white via-white to-white bg-clip-text text-transparent drop-shadow-[0_2px_8px_rgba(0,0,0,0.25)]">
               Welcome back
@@ -244,15 +320,42 @@ export default function DashboardPage() {
           <p className="mt-1 text-white/75">Here’s a quick overview of your progress.</p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            onClick={exportCSV}
-            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/80 hover:bg-white/10"
-            title="Export attempts as CSV"
+        {/* Seed + export controls */}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Seed role */}
+          <select
+            value={seedRole}
+            onChange={(e) => setSeedRole(e.target.value)}
+            className="rounded-xl border border-white/10 bg-white/5 px-2 py-2 text-sm text-white/80 outline-none hover:bg-white/10"
+            title="Role to seed"
           >
-            <Download className="h-4 w-4" />
-            Export CSV
-          </button>
+            {allRoles.map((r) => (
+              <option key={r} value={r} className="bg-slate-900 text-white">
+                {r}
+              </option>
+            ))}
+          </select>
+
+          {/* Seed difficulty */}
+          <select
+            value={seedDifficulty}
+            onChange={(e) => setSeedDifficulty(e.target.value as any)}
+            className="rounded-xl border border-white/10 bg-white/5 px-2 py-2 text-sm text-white/80 outline-none hover:bg-white/10"
+            title="Difficulty (optional)"
+          >
+            <option value="" className="bg-slate-900 text-white">
+              Any difficulty
+            </option>
+            <option value="easy" className="bg-slate-900 text-white">
+              easy
+            </option>
+            <option value="medium" className="bg-slate-900 text-white">
+              medium
+            </option>
+            <option value="hard" className="bg-slate-900 text-white">
+              hard
+            </option>
+          </select>
 
           <button
             onClick={seedOne}
@@ -260,6 +363,15 @@ export default function DashboardPage() {
             title="Create a sample attempt"
           >
             <Plus className="h-4 w-4" /> Seed sample
+          </button>
+
+          <button
+            onClick={exportCSV}
+            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/80 hover:bg-white/10"
+            title="Export attempts as CSV"
+          >
+            <Download className="h-4 w-4" />
+            Export CSV
           </button>
         </div>
       </div>
@@ -364,6 +476,28 @@ export default function DashboardPage() {
           </>
         )}
       </section>
+
+      {/* By role summary */}
+      {!loading && byRole.length > 0 && (
+        <section className="space-y-3">
+          <h3 className="text-lg font-medium">By role</h3>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {byRole.map((r) => (
+              <Card key={r.role}>
+                <div className="flex items-center justify-between">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">{r.role}</p>
+                    <p className="mt-1 text-xs text-white/60">
+                      {r.count} session{r.count === 1 ? "" : "s"} • {r.minutes} min
+                    </p>
+                  </div>
+                  <span className={`text-2xl font-bold ${scoreClass(r.avg)}`}>{r.avg}</span>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Recent Sessions (filtered) */}
       <section className="space-y-3">
