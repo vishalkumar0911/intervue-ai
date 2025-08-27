@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/Card";
 import { api, type Attempt } from "@/lib/api";
+import { useApi } from "@/lib/useApi";
 import {
   LineChart,
   Line,
@@ -166,9 +167,17 @@ function DateInput({
 /* ----------------------------------- page ---------------------------------- */
 
 export default function AnalyticsPage() {
-  const [attempts, setAttempts] = useState<Attempt[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
+  // 🔁 Load attempts via SWR-lite hook (auto refresh + dedupe)
+  const {
+    data: attempts = [],
+    loading,
+    error,
+    refetch,
+  } = useApi<Attempt[]>(
+    ["attempts", "analytics"],
+    () => api.getAttempts({ limit: 500 }),
+    { refreshInterval: 60_000, revalidateOnFocus: true, dedupeMs: 200 }
+  );
 
   // filters
   const allRoles = useMemo(() => Array.from(new Set(attempts.map((a) => a.role))).sort(), [attempts]);
@@ -180,25 +189,10 @@ export default function AnalyticsPage() {
   const [metric, setMetric] = useState<"avg" | "sessions">("avg");
   const [stackByDiff, setStackByDiff] = useState(false);
   const [maWindow, setMaWindow] = useState<0 | 7>(7); // moving average
+  const [showValues, setShowValues] = useState<boolean>(true);
 
-  async function load() {
-    setLoading(true);
-    setErr(null);
-    try {
-      const data = await api.getAttempts({ limit: 500 });
-      setAttempts(data.sort((a, b) => +new Date(a.date) - +new Date(b.date)));
-      if (!selectedRoles.length) setSelectedRoles([]); // "all"
-    } catch (e: any) {
-      setErr(e?.message ?? "Failed to load attempts");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // show errors from hook
+  const err = error?.message ?? null;
 
   // apply filters
   const filtered = useMemo(() => {
@@ -206,7 +200,10 @@ export default function AnalyticsPage() {
     const fromTime = from ? new Date(from + "T00:00:00").getTime() : -Infinity;
     const toTime = to ? new Date(to + "T23:59:59").getTime() : Infinity;
 
-    return attempts.filter((a) => {
+    // Sort ASC for line chart; hook returns newest-first but we need time-series left->right
+    const asc = [...attempts].sort((a, b) => +new Date(a.date) - +new Date(b.date));
+
+    return asc.filter((a) => {
       const t = new Date(a.date).getTime();
       const roleOk = hasRoleFilter ? selectedRoles.includes(a.role) : true;
       const dateOk = t >= fromTime && t <= toTime;
@@ -277,8 +274,7 @@ export default function AnalyticsPage() {
     if (metric === "avg") return avgByRole.map(({ role, avg }) => ({ role, avg }));
     if (stackByDiff) {
       return [...stackedByDiff].sort(
-        (a, b) =>
-          b.easy + b.medium + b.hard + b.unknown - (a.easy + a.medium + a.hard + a.unknown)
+        (a, b) => b.easy + b.medium + b.hard + b.unknown - (a.easy + a.medium + a.hard + a.unknown)
       );
     }
     return roleCounts.map(({ role, count }) => ({ role, count }));
@@ -288,10 +284,7 @@ export default function AnalyticsPage() {
   const yMax = useMemo(() => {
     if (metric === "avg") return 100;
     if (stackByDiff) {
-      const max = Math.max(
-        0,
-        ...stackedByDiff.map((r) => r.easy + r.medium + r.hard + r.unknown)
-      );
+      const max = Math.max(0, ...stackedByDiff.map((r) => r.easy + r.medium + r.hard + r.unknown));
       return max + 1;
     }
     const max = Math.max(0, ...roleCounts.map((r) => r.count));
@@ -303,9 +296,9 @@ export default function AnalyticsPage() {
     [stackByDiff, stackedByDiff]
   );
 
-  /* -------------------------- controls helpers --------------------------- */
-
   const empty = !loading && filtered.length === 0;
+
+  /* -------------------------- controls helpers --------------------------- */
 
   function setLastDays(days: number) {
     const end = new Date();
@@ -325,13 +318,48 @@ export default function AnalyticsPage() {
     setSelectedRoles([]); // empty = all
   }
 
+  function exportCsv() {
+    const rows = [
+      ["id", "role", "score", "duration_min", "date", "difficulty"],
+      ...filtered.map((a) => [a.id, a.role, String(a.score), String(a.duration_min), a.date, a.difficulty ?? ""]),
+    ];
+    const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `analytics_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   /* --------------------------------- render -------------------------------- */
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Analytics</h1>
-        <p className="text-white/70">Visual insights about your performance.</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold">Analytics</h1>
+          <p className="text-white/70">Visual insights about your performance.</p>
+        </div>
+        {!loading && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => refetch().catch(() => {})}
+              className="rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/80 hover:bg-white/10"
+              title="Refresh data"
+            >
+              Refresh
+            </button>
+            <button
+              onClick={exportCsv}
+              className="rounded-xl bg-brand-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-500"
+              title="Export filtered attempts"
+            >
+              Export CSV
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Filters */}
@@ -378,7 +406,7 @@ export default function AnalyticsPage() {
           </button>
           <button
             onClick={clearRange}
-            className="rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10"
+            className="rounded-2xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10"
           >
             All time
           </button>
@@ -396,7 +424,7 @@ export default function AnalyticsPage() {
           <SkeletonCard />
           <SkeletonCard />
         </div>
-      ) : empty ? (
+      ) : filtered.length === 0 ? (
         <Card>
           <p className="text-sm text-white/70">
             No attempts for the selected filters. Adjust Role/Date above or seed more data.
@@ -493,8 +521,37 @@ export default function AnalyticsPage() {
                   onClick={() => setStackByDiff((v) => !v)}
                   disabled={metric !== "sessions"}
                 />
+                <Chip
+                  label="Show values"
+                  active={showValues}
+                  onClick={() => setShowValues((v) => !v)}
+                />
               </div>
             </div>
+
+            {/* Legend for stacked mode */}
+            {metric === "sessions" && stackByDiff && (
+              <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-white/70">
+                <span className="inline-flex items-center gap-1">
+                  <span className="inline-block h-2 w-2 rounded" style={{ backgroundColor: "#34d399" }} />
+                  Easy
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="inline-block h-2 w-2 rounded" style={{ backgroundColor: "#f59e0b" }} />
+                  Medium
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="inline-block h-2 w-2 rounded" style={{ backgroundColor: "#ef4444" }} />
+                  Hard
+                </span>
+                {stackedByDiff.some((r) => r.unknown > 0) && (
+                  <span className="inline-flex items-center gap-1">
+                    <span className="inline-block h-2 w-2 rounded" style={{ backgroundColor: "#9ca3af" }} />
+                    Unknown
+                  </span>
+                )}
+              </div>
+            )}
 
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
@@ -553,28 +610,44 @@ export default function AnalyticsPage() {
 
                   {metric === "avg" ? (
                     <Bar dataKey="avg" radius={[10, 10, 0, 0]} fill="url(#gradBars)">
-                      <LabelList dataKey="avg" position="top" style={{ fill: "rgba(255,255,255,.9)", fontSize: 12 }} />
+                      {showValues && (
+                        <LabelList
+                          dataKey="avg"
+                          position="top"
+                          style={{ fill: "rgba(255,255,255,.9)", fontSize: 12 }}
+                        />
+                      )}
                     </Bar>
                   ) : stackByDiff ? (
                     <>
                       <Bar dataKey="easy" stackId="d" radius={[10, 10, 0, 0]} fill="#34d399">
-                        <LabelList dataKey="easy" position="top" style={{ fill: "rgba(255,255,255,.9)", fontSize: 11 }} />
+                        {showValues && (
+                          <LabelList dataKey="easy" position="top" style={{ fill: "rgba(255,255,255,.9)", fontSize: 11 }} />
+                        )}
                       </Bar>
                       <Bar dataKey="medium" stackId="d" fill="#f59e0b">
-                        <LabelList dataKey="medium" position="top" style={{ fill: "rgba(255,255,255,.9)", fontSize: 11 }} />
+                        {showValues && (
+                          <LabelList dataKey="medium" position="top" style={{ fill: "rgba(255,255,255,.9)", fontSize: 11 }} />
+                        )}
                       </Bar>
                       <Bar dataKey="hard" stackId="d" fill="#ef4444">
-                        <LabelList dataKey="hard" position="top" style={{ fill: "rgba(255,255,255,.9)", fontSize: 11 }} />
+                        {showValues && (
+                          <LabelList dataKey="hard" position="top" style={{ fill: "rgba(255,255,255,.9)", fontSize: 11 }} />
+                        )}
                       </Bar>
                       {showUnknown && (
                         <Bar dataKey="unknown" stackId="d" fill="#9ca3af">
-                          <LabelList dataKey="unknown" position="top" style={{ fill: "rgba(255,255,255,.9)", fontSize: 11 }} />
+                          {showValues && (
+                            <LabelList dataKey="unknown" position="top" style={{ fill: "rgba(255,255,255,.9)", fontSize: 11 }} />
+                          )}
                         </Bar>
                       )}
                     </>
                   ) : (
                     <Bar dataKey="count" radius={[10, 10, 0, 0]} fill="url(#gradBars)">
-                      <LabelList dataKey="count" position="top" style={{ fill: "rgba(255,255,255,.9)", fontSize: 12 }} />
+                      {showValues && (
+                        <LabelList dataKey="count" position="top" style={{ fill: "rgba(255,255,255,.9)", fontSize: 12 }} />
+                      )}
                     </Bar>
                   )}
                 </BarChart>

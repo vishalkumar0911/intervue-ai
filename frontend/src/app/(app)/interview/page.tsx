@@ -1,20 +1,16 @@
+// src/app/(app)/interview/page.tsx
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 import {
-  Sparkles,
-  Info,
-  Keyboard,
-  RefreshCw,
-  ChevronRight,
-  ChevronLeft,
-  Loader2,
-  CheckCircle2,
-  X,
+  Sparkles, Info, Keyboard, RefreshCw,
+  ChevronRight, ChevronLeft, Loader2,
+  CheckCircle2, X, Star, StarOff, Copy,
+  Volume2, VolumeX, Timer, StickyNote,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
@@ -24,11 +20,15 @@ import ShuffleToggle from "@/components/ShuffleToggle";
 import { api, Question, type AttemptCreate } from "@/lib/api";
 import { Card } from "@/components/Card";
 import { useInterviewStore, Difficulty } from "@/store/interview";
+import {
+  isBookmarked as checkBM,
+  upsertBookmark,
+  removeBookmark,
+} from "@/lib/bookmarks";
+import { getNote, setNote, exportNotesCSV } from "@/lib/notes";
 
 /* ---------- small utils ---------- */
-function pad(n: number) {
-  return n < 10 ? `0${n}` : String(n);
-}
+function pad(n: number) { return n < 10 ? `0${n}` : String(n); }
 function fmtMMSS(ms: number) {
   const s = Math.max(0, Math.floor(ms / 1000));
   const mm = Math.floor(s / 60);
@@ -37,8 +37,19 @@ function fmtMMSS(ms: number) {
 }
 const PREFS_KEY = "interview:prefs";
 
+type Prefs = {
+  role?: string;
+  difficulty?: Difficulty;
+  shuffle?: boolean;
+  tts?: boolean;
+  qSecs?: 0 | 15 | 30 | 60;
+};
+
 export default function InterviewPage() {
   const router = useRouter();
+  const search = useSearchParams();
+  const focusId = search.get("focus") || undefined;
+  const roleParam = search.get("role") || undefined;
 
   // local roles (from API)
   const [roles, setRoles] = useState<string[]>([]);
@@ -62,38 +73,60 @@ export default function InterviewPage() {
   const next = useInterviewStore((s) => s.next);
   const resetStore = useInterviewStore((s) => s.reset);
 
-  // Track session start (for duration)
-  const startedAtRef = useRef<number>(Date.now());
-  const [now, setNow] = useState<number>(Date.now());
+  /* ------ persisted preferences ------ */
+  const [prefs, setPrefs] = useState<Prefs>({ qSecs: 0, tts: false });
 
-  // live timer tick
-  useEffect(() => {
-    const tick = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(tick);
-  }, []);
-  const elapsed = now - startedAtRef.current;
-
-  // restore persisted prefs (role/difficulty/shuffle)
   useEffect(() => {
     try {
       const raw = localStorage.getItem(PREFS_KEY);
-      if (!raw) return;
-      const p = JSON.parse(raw) as { role?: string; difficulty?: Difficulty; shuffle?: boolean };
-      if (p.role) setRole(p.role);
-      if (p.difficulty !== undefined) setDifficulty(p.difficulty);
-      if (typeof p.shuffle === "boolean") setShuffle(p.shuffle);
+      if (raw) {
+        const p = JSON.parse(raw) as Prefs;
+        setPrefs((prev) => ({ ...prev, ...p }));
+        if (!role && p.role) setRole(p.role);
+        if (p.difficulty !== undefined) setDifficulty(p.difficulty);
+        if (typeof p.shuffle === "boolean") setShuffle(p.shuffle);
+      }
     } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  // persist on change
+
+  // Allow deep link role override
+  useEffect(() => {
+    if (roleParam) setRole(roleParam);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roleParam]);
+
   useEffect(() => {
     try {
       localStorage.setItem(
         PREFS_KEY,
-        JSON.stringify({ role, difficulty, shuffle })
+        JSON.stringify({ role, difficulty, shuffle, tts: prefs.tts, qSecs: prefs.qSecs ?? 0 })
       );
     } catch {}
-  }, [role, difficulty, shuffle]);
+  }, [role, difficulty, shuffle, prefs.tts, prefs.qSecs]);
+
+  // Track session time
+  const startedAtRef = useRef<number>(Date.now());
+  const [now, setNow] = useState<number>(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const elapsed = now - startedAtRef.current;
+
+  // per-question countdown
+  const endRef = useRef<number | null>(null);
+  const remaining = prefs.qSecs ? Math.max(0, (endRef.current ?? Date.now()) - now) : 0;
+
+  useEffect(() => {
+    if (!prefs.qSecs || loading || !bank.length) return;
+    if (remaining === 0 && endRef.current) {
+      next();
+      endRef.current = Date.now() + prefs.qSecs * 1000;
+      toast.message("Auto next", { description: `#${index + 2} of ${bank.length}` });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remaining, prefs.qSecs, bank.length, loading]);
 
   // load roles once
   useEffect(() => {
@@ -110,12 +143,10 @@ export default function InterviewPage() {
         }
       }
     })();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, [setError]);
 
-  // fetch question bank on filter changes
+  // fetch bank whenever filters change
   const fetchBank = useCallback(async () => {
     if (!role) return;
     setLoading(true);
@@ -128,56 +159,119 @@ export default function InterviewPage() {
         shuffle,
       });
 
-      if (list.length === 0 && difficulty) {
-        // fallback to all difficulties when filtered result is empty
-        const all = await api.questions({ role, limit: 50, shuffle });
-        setBank(all);
-        setIndex(0);
-        toast.info("No questions for that difficulty — showing all.");
-      } else {
-        setBank(list);
-        setIndex(0);
-        toast.success(`Loaded ${list.length} question${list.length === 1 ? "" : "s"}.`);
-      }
+      const useList = (list.length === 0 && difficulty)
+        ? await api.questions({ role, limit: 50, shuffle })
+        : list;
 
-      // reset session start time whenever we (re)load a bank
+      setBank(useList);
+      setIndex(0);
+      toast.success(`Loaded ${useList.length} question${useList.length === 1 ? "" : "s"}.`);
+
       startedAtRef.current = Date.now();
       setNow(Date.now());
+      if (prefs.qSecs) endRef.current = Date.now() + prefs.qSecs * 1000;
+
     } catch {
       setError("Could not fetch questions.");
       toast.error("Could not fetch questions.");
     } finally {
       setLoading(false);
     }
-  }, [role, difficulty, shuffle, setBank, setIndex, setError, setLoading]);
+  }, [role, difficulty, shuffle, setBank, setIndex, setError, setLoading, prefs.qSecs]);
 
-  useEffect(() => {
-    fetchBank();
-  }, [fetchBank]);
+  useEffect(() => { fetchBank(); }, [fetchBank]);
 
   // derived current
   const current: Question | null = useMemo(() => bank[index] ?? null, [bank, index]);
 
-  // keyboard shortcuts: N/→ next, P/← prev
+  // jump to focus= question id (deep link)
+  useEffect(() => {
+    if (!focusId || !bank.length) return;
+    const i = bank.findIndex((q) => q.id === focusId);
+    if (i >= 0) setIndex(i);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusId, bank.length]);
+
+  /* ---------------- Bookmarks ---------------- */
+  const bookmarked = checkBM(current?.id);
+
+  function toggleBookmark() {
+    if (!current) return;
+    if (bookmarked) {
+      removeBookmark(current.id);
+      toast("Removed bookmark");
+    } else {
+      upsertBookmark({
+        id: current.id,
+        role: current.role,
+        text: current.text,
+        topic: current.topic ?? null,
+        difficulty: (current.difficulty as any) ?? null,
+        created: Date.now(),
+      });
+      toast("Bookmarked");
+    }
+  }
+
+  /* ---------------- TTS ---------------- */
+  function speak(text?: string) {
+    if (!text) return;
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      toast.error("Speech not supported");
+      return;
+    }
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+  }
+  function cancelSpeech() {
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+  }
+  useEffect(() => {
+    if (!prefs.tts) return;
+    if (current?.text) speak(current.text);
+    return () => cancelSpeech();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [index, current?.id, prefs.tts]);
+
+  /* ---------------- Notes ---------------- */
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [note, setNoteState] = useState("");
+  // load note on question change
+  useEffect(() => {
+    setNoteState(getNote(current?.id));
+  }, [current?.id]);
+  // debounce save
+  useEffect(() => {
+    if (!current?.id) return;
+    const id = setTimeout(() => setNote(current.id!, note), 300);
+    return () => clearTimeout(id);
+  }, [note, current?.id]);
+
+  // keyboard
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (loading || !bank.length) return;
-      if (e.key === "n" || e.key === "N" || e.key === "ArrowRight") {
-        e.preventDefault();
-        next();
+      if (["n", "N", "ArrowRight"].includes(e.key)) {
+        e.preventDefault(); cancelSpeech();
+        next(); if (prefs.qSecs) endRef.current = Date.now() + prefs.qSecs * 1000;
         toast.message("Next question", { description: `#${index + 2} of ${bank.length}` });
-      } else if (e.key === "p" || e.key === "P" || e.key === "ArrowLeft") {
-        e.preventDefault();
+      } else if (["p", "P", "ArrowLeft"].includes(e.key)) {
+        e.preventDefault(); cancelSpeech();
         setIndex((index - 1 + bank.length) % bank.length);
+        if (prefs.qSecs) endRef.current = Date.now() + prefs.qSecs * 1000;
         toast.message("Previous question", { description: `#${index} of ${bank.length}` });
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [loading, bank.length, next, index, setIndex, bank.length]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, bank.length, next, index, setIndex, prefs.qSecs]);
 
-  // reset flow
+  // reset session
   const onReset = useCallback(() => {
+    cancelSpeech();
     resetStore();
     fetchBank();
     toast.info("Session reset");
@@ -186,7 +280,11 @@ export default function InterviewPage() {
   // ---------- Complete/Save flow ----------
   const [completeOpen, setCompleteOpen] = useState(false);
   const [score, setScore] = useState(75);
-  const tryPrev = () => setIndex((index - 1 + bank.length) % bank.length);
+  const tryPrev = () => {
+    cancelSpeech();
+    setIndex((index - 1 + bank.length) % bank.length);
+    if (prefs.qSecs) endRef.current = Date.now() + prefs.qSecs * 1000;
+  };
 
   function scorePill(n: number) {
     return n >= 80
@@ -197,17 +295,11 @@ export default function InterviewPage() {
   }
 
   async function saveAttempt() {
-    if (!role) {
-      toast.error("Pick a role first");
-      return;
-    }
+    if (!role) { toast.error("Pick a role first"); return; }
     const minutes = Math.max(1, Math.round((Date.now() - startedAtRef.current) / 60000));
     const payload: AttemptCreate = {
-      role,
-      score,
-      duration_min: minutes,
-      date: new Date().toISOString(),
-      difficulty: (difficulty || undefined) as "easy" | "medium" | "hard" | undefined, // NEW
+      role, score, duration_min: minutes, date: new Date().toISOString(),
+      difficulty: (difficulty || undefined) as any,
     };
     try {
       await api.createAttempt(payload);
@@ -215,9 +307,19 @@ export default function InterviewPage() {
       setCompleteOpen(false);
       resetStore();
       router.push("/dashboard");
-    } catch (e) {
-      toast.error("Failed to save session");
-    }
+    } catch { toast.error("Failed to save session"); }
+  }
+
+  function copyQuestion() {
+    if (!current?.text) return;
+    navigator.clipboard.writeText(current.text).then(
+      () => toast.success("Copied"),
+      () => toast.error("Copy failed")
+    );
+  }
+  function setCountdown(sec: 0 | 15 | 30 | 60) {
+    setPrefs((p) => ({ ...p, qSecs: sec }));
+    endRef.current = sec ? Date.now() + sec * 1000 : null;
   }
 
   return (
@@ -237,37 +339,91 @@ export default function InterviewPage() {
           <RoleSelect
             roles={roles}
             value={role}
-            onChange={(r) => {
-              setRole(r);
-              toast.success(`Role: ${r}`);
-            }}
+            onChange={(r) => { setRole(r); toast.success(`Role: ${r}`); }}
           />
           <DifficultySelect value={difficulty as Difficulty} onChange={setDifficulty} />
           <div className="flex items-end">
             <ShuffleToggle
               checked={shuffle}
-              onChange={(v) => {
-                setShuffle(v);
-                toast.message(v ? "Shuffle on" : "Shuffle off");
-              }}
+              onChange={(v) => { setShuffle(v); toast.message(v ? "Shuffle on" : "Shuffle off"); }}
             />
+          </div>
+        </div>
+
+        {/* secondary toolbar */}
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+          <button
+            onClick={() => {
+              const on = !prefs.tts;
+              setPrefs((p) => ({ ...p, tts: on }));
+              if (on && current?.text) speak(current.text);
+              if (!on) cancelSpeech();
+            }}
+            className={[
+              "inline-flex items-center gap-2 rounded-lg border px-3 py-1.5",
+              prefs.tts
+                ? "border-brand-400/30 bg-brand-600/20 text-white"
+                : "border-white/10 bg-white/5 text-white/80 hover:bg-white/10",
+            ].join(" ")}
+            title="Toggle speech"
+          >
+            {prefs.tts ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+            Speak
+          </button>
+
+          <button
+            onClick={copyQuestion}
+            className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-white/80 hover:bg-white/10"
+            title="Copy question"
+          >
+            <Copy className="h-4 w-4" /> Copy
+          </button>
+
+          <button
+            onClick={() => setNotesOpen((v) => !v)}
+            className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-white/80 hover:bg-white/10"
+            title="Notes"
+          >
+            <StickyNote className="h-4 w-4" /> Notes
+          </button>
+
+          <div className="mx-2 h-4 w-px bg-white/10" />
+
+          <div className="inline-flex items-center gap-1">
+            <Timer className="h-4 w-4 opacity-80" />
+            <span className="text-white/70">Auto-next:</span>
+            {([0, 15, 30, 60] as const).map((sec) => (
+              <button
+                key={sec}
+                onClick={() => setCountdown(sec)}
+                className={[
+                  "rounded-lg border px-2 py-1 text-xs",
+                  prefs.qSecs === sec
+                    ? "border-brand-400/30 bg-brand-600/20 text-white"
+                    : "border-white/10 bg-white/5 text-white/80 hover:bg-white/10",
+                ].join(" ")}
+              >
+                {sec === 0 ? "off" : `${sec}s`}
+              </button>
+            ))}
+            {prefs.qSecs ? (
+              <span className="ml-2 rounded-md bg-black/20 px-2 py-0.5 text-xs text-white/80">
+                {fmtMMSS(remaining)}
+              </span>
+            ) : null}
           </div>
         </div>
 
         {/* errors */}
         {error && (
-          <div
-            className="mt-4 flex items-center gap-3 rounded-2xl border p-4 text-sm
-                       border-rose-200/60 bg-rose-50 text-rose-700
-                       dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200"
-            role="alert"
-          >
+          <div className="mt-4 flex items-center gap-3 rounded-2xl border p-4 text-sm
+                          border-rose-200/60 bg-rose-50 text-rose-700
+                          dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200" role="alert">
             <Info className="h-4 w-4" />
             <span>{error}</span>
           </div>
         )}
 
-        {/* empty state */}
         {!role && (
           <Card>
             <div className="flex items-start gap-3">
@@ -275,9 +431,9 @@ export default function InterviewPage() {
               <div>
                 <p className="font-medium">Choose a role to begin</p>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Tip: use <kbd className="rounded bg-black/10 px-1 dark:bg-white/10">P</kbd>{" "}
-                  / <kbd className="rounded bg-black/10 px-1 dark:bg-white/10">N</kbd> or{" "}
-                  <kbd className="rounded bg-black/10 px-1 dark:bg-white/10">←</kbd>{" "}
+                  Tip: use <kbd className="rounded bg-black/10 px-1 dark:bg-white/10">P</kbd> /
+                  <kbd className="rounded bg-black/10 px-1 dark:bg-white/10">N</kbd> or
+                  <kbd className="rounded bg-black/10 px-1 dark:bg-white/10">←</kbd>
                   <kbd className="rounded bg-black/10 px-1 dark:bg-white/10">→</kbd> to switch.
                 </p>
               </div>
@@ -285,27 +441,18 @@ export default function InterviewPage() {
           </Card>
         )}
 
-        {/* suggestion when no questions are found */}
         {!loading && role && bank.length === 0 && (
-          <p className="mt-3 text-sm text-muted-foreground">
-            Try another difficulty or enable Shuffle.
-          </p>
+          <p className="mt-3 text-sm text-muted-foreground">Try another difficulty or enable Shuffle.</p>
         )}
 
-        {/* question card */}
         {role && (
           <div className="mt-6 rounded-2xl border border-black/10 bg-white p-6 shadow-soft dark:border-white/10 dark:bg-white/5">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0 flex-1">
-                <p
-                  aria-live="polite"
-                  className="text-xs uppercase tracking-wide text-brand-600/80 dark:text-brand-300/80"
-                >
-                  Question {bank.length ? index + 1 : 0}
-                  {bank.length ? ` of ${bank.length}` : ""}
+                <p aria-live="polite" className="text-xs uppercase tracking-wide text-brand-600/80 dark:text-brand-300/80">
+                  Question {bank.length ? index + 1 : 0}{bank.length ? ` of ${bank.length}` : ""}
                 </p>
 
-                {/* Question block with fixed min height for readability */}
                 <div className="mt-1 min-h-[92px] md:min-h-[112px] lg:min-h-[124px] flex items-start">
                   <div aria-live="polite" aria-atomic="true" className="w-full">
                     <AnimatePresence mode="wait">
@@ -315,9 +462,7 @@ export default function InterviewPage() {
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -6 }}
                         transition={{ duration: 0.18 }}
-                        className="text-2xl md:text-3xl font-semibold tracking-tight leading-tight text-white
-                                   drop-shadow-[0_1px_0_rgba(0,0,0,0.32)] dark:text-white"
-                      >
+                        className="text-2xl md:text-3xl font-semibold tracking-tight leading-tight text-white drop-shadow-[0_1px_0_rgba(0,0,0,0.32)] dark:text-white">
                         {loading ? (
                           <span className="inline-flex items-center gap-2 text-muted-foreground">
                             <Loader2 className="h-4 w-4 animate-spin" /> Loading…
@@ -330,112 +475,113 @@ export default function InterviewPage() {
                   </div>
                 </div>
 
-                {/* chips */}
-                <div className="mt-3 flex flex-wrap gap-2">
+                <div className="mt-3 flex flex-wrap items-center gap-2">
                   {current?.topic && <Badge variant="neutral">Topic: {current.topic}</Badge>}
                   {current?.difficulty && (
-                    <span
-                      className={[
-                        "inline-flex items-center rounded-xl px-2.5 py-1 text-xs ring-1",
-                        current.difficulty === "easy" &&
-                          "bg-emerald-500/15 text-emerald-700 ring-emerald-400/30 dark:text-emerald-200",
-                        current.difficulty === "medium" &&
-                          "bg-amber-500/15  text-amber-700  ring-amber-400/30  dark:text-amber-200",
-                        current.difficulty === "hard" &&
-                          "bg-rose-500/15   text-rose-700   ring-rose-400/30    dark:text-rose-200",
-                      ].join(" ")}
-                    >
+                    <span className={[
+                      "inline-flex items-center rounded-xl px-2.5 py-1 text-xs ring-1",
+                      current.difficulty === "easy" && "bg-emerald-500/15 text-emerald-700 ring-emerald-400/30 dark:text-emerald-200",
+                      current.difficulty === "medium" && "bg-amber-500/15  text-amber-700  ring-amber-400/30  dark:text-amber-200",
+                      current.difficulty === "hard" && "bg-rose-500/15   text-rose-700   ring-rose-400/30    dark:text-rose-200",
+                    ].join(" ")}>
                       Difficulty: {current.difficulty}
                     </span>
                   )}
+
+                  <button
+                    onClick={toggleBookmark}
+                    className="ml-2 inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-white/80 hover:bg-white/10"
+                    title={bookmarked ? "Remove bookmark" : "Bookmark this question"}>
+                    {bookmarked ? <Star className="h-4 w-4 text-yellow-300" /> : <StarOff className="h-4 w-4" />}
+                    <span className="text-xs">{bookmarked ? "Bookmarked" : "Bookmark"}</span>
+                  </button>
                 </div>
               </div>
 
               <div className="flex items-center gap-2 shrink-0">
-                <Button
-                  variant="secondary"
-                  onClick={onReset}
-                  disabled={loading}
-                  title="Clear and refetch"
-                  className="inline-flex items-center gap-2"
-                >
-                  <RefreshCw className="h-4 w-4" />
-                  Reset
+                <Button variant="secondary" onClick={onReset} disabled={loading} title="Clear and refetch" className="inline-flex items-center gap-2">
+                  <RefreshCw className="h-4 w-4" /> Reset
                 </Button>
-                <Button
-                  variant="ghost"
-                  onClick={tryPrev}
-                  disabled={loading || !bank.length}
-                  title="Shortcut: P or ←"
-                  className="inline-flex items-center gap-2"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                  Prev
+                <Button variant="ghost" onClick={tryPrev} disabled={loading || !bank.length} title="Shortcut: P or ←" className="inline-flex items-center gap-2">
+                  <ChevronLeft className="h-4 w-4" /> Prev
                 </Button>
                 <Button
                   onClick={() => {
+                    cancelSpeech();
                     next();
+                    if (prefs.qSecs) endRef.current = Date.now() + prefs.qSecs * 1000;
                     if (bank.length) {
-                      toast.message("Next question", {
-                        description: `#${index + 2} of ${bank.length}`,
-                      });
+                      toast.message("Next question", { description: `#${index + 2} of ${bank.length}` });
                     }
                   }}
                   disabled={loading || !bank.length}
                   title="Shortcut: N or →"
-                  className="inline-flex items-center gap-2"
-                >
-                  {loading ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4" />
-                  )}
-                  Next
+                  className="inline-flex items-center gap-2">
+                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronRight className="h-4 w-4" />} Next
                 </Button>
               </div>
             </div>
 
-            {/* progress bar */}
+            {/* progress */}
             <div className="mt-6 h-2 w-full overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
               <div
-                role="progressbar"
-                aria-valuemin={0}
-                aria-valuemax={bank.length || 0}
+                role="progressbar" aria-valuemin={0} aria-valuemax={bank.length || 0}
                 aria-valuenow={Math.min(index + 1, bank.length)}
                 className="h-full bg-gradient-to-r from-brand-500 to-accent-500 transition-[width] duration-300"
-                style={{ width: bank.length ? `${((index + 1) / bank.length) * 100}%` : "0%" }}
-              />
+                style={{ width: bank.length ? `${((index + 1) / bank.length) * 100}%` : "0%" }} />
             </div>
 
-            {/* Complete Session CTA + panel */}
-            <div className="mt-5 flex items-center justify-between gap-3">
+            {/* footer & notes */}
+            <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
               <p className="text-xs text-muted-foreground">
                 Session time: {fmtMMSS(elapsed)}
+                {prefs.qSecs ? (
+                  <span className="ml-3 inline-flex items-center gap-1 text-white/70">
+                    <Timer className="h-3 w-3" /> <span>Next in: {fmtMMSS(remaining)}</span>
+                  </span>
+                ) : null}
               </p>
-              {!completeOpen ? (
-                <Button
-                  variant="primary"
-                  onClick={() => setCompleteOpen(true)}
-                  disabled={!role || !bank.length || loading}
-                  className="inline-flex items-center gap-2"
-                  title="Save this session to your history"
-                >
-                  <CheckCircle2 className="h-4 w-4" />
-                  Complete session
-                </Button>
-              ) : (
-                <Button
-                  variant="ghost"
-                  onClick={() => setCompleteOpen(false)}
-                  className="inline-flex items-center gap-2"
-                  title="Cancel"
-                >
-                  <X className="h-4 w-4" />
-                  Cancel
-                </Button>
-              )}
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setNotesOpen((v) => !v)}
+                  className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-white/80 hover:bg-white/10"
+                  title="Open notes">
+                  <StickyNote className="h-4 w-4" /> Notes
+                </button>
+                <button
+                  onClick={() => exportNotesCSV()}
+                  className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-white/80 hover:bg-white/10"
+                  title="Export notes">
+                  Export notes
+                </button>
+
+                {!completeOpen ? (
+                  <Button variant="primary" onClick={() => setCompleteOpen(true)} disabled={!role || !bank.length || loading} className="inline-flex items-center gap-2" title="Save this session">
+                    <CheckCircle2 className="h-4 w-4" /> Complete session
+                  </Button>
+                ) : (
+                  <Button variant="ghost" onClick={() => setCompleteOpen(false)} className="inline-flex items-center gap-2" title="Cancel">
+                    <X className="h-4 w-4" /> Cancel
+                  </Button>
+                )}
+              </div>
             </div>
 
+            {/* notes panel */}
+            {notesOpen && current?.id && (
+              <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-4">
+                <p className="mb-2 text-sm text-white/70">Notes for this question</p>
+                <textarea
+                  value={note}
+                  onChange={(e) => setNoteState(e.target.value)}
+                  placeholder="Write your thoughts, structure, hints…"
+                  className="min-h-[120px] w-full rounded-lg border border-white/10 bg-black/10 p-3 text-sm outline-none focus:border-brand-400/60"
+                />
+              </div>
+            )}
+
+            {/* complete/save panel */}
             {completeOpen && (
               <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -444,29 +590,13 @@ export default function InterviewPage() {
                     <p className="text-xs text-white/60">Move the slider and click Save</p>
                   </div>
                   <div className="flex items-center gap-3">
-                    <span
-                      className={`inline-flex items-center rounded-lg px-2 py-1 text-xs ring-1 ${scorePill(
-                        score
-                      )}`}
-                    >
-                      {score}
-                    </span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      value={score}
-                      onChange={(e) => setScore(parseInt(e.target.value))}
-                      className="w-48 accent-brand-500"
-                    />
-                    <Button onClick={saveAttempt} className="ml-1">
-                      Save
-                    </Button>
+                    <span className={`inline-flex items-center rounded-lg px-2 py-1 text-xs ring-1 ${scorePill(score)}`}>{score}</span>
+                    <input type="range" min={0} max={100} value={score} onChange={(e) => setScore(parseInt(e.target.value))} className="w-48 accent-brand-500" />
+                    <Button onClick={saveAttempt} className="ml-1">Save</Button>
                   </div>
                 </div>
               </div>
             )}
-            {/* end complete panel */}
           </div>
         )}
       </section>

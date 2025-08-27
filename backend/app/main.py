@@ -1,4 +1,7 @@
 from __future__ import annotations
+from fastapi.responses import StreamingResponse
+import io, csv
+
 
 from datetime import datetime
 from pathlib import Path
@@ -515,6 +518,36 @@ def update_attempt(attempt_id: str, patch: AttemptUpdate):
     if not updated:
         raise HTTPException(status_code=404, detail="Attempt not found")
     return updated
+
+@app.get("/attempts/export")
+def export_attempts(role: Optional[str] = Query(None)):
+    """
+    Stream a CSV export of attempts (optionally filtered by ?role=…).
+    Columns: id,role,score,duration_min,date,difficulty
+    """
+    items = _read_attempts_jsonl(limit=10_000, role=role)
+    def iter_csv():
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["id", "role", "score", "duration_min", "date", "difficulty"])
+        yield output.getvalue()
+        output.seek(0); output.truncate(0)
+
+        for it in items:
+            writer.writerow([
+                it.id,
+                it.role,
+                it.score,
+                it.duration_min,
+                # Ensure ISO string
+                it.date.isoformat() if hasattr(it.date, "isoformat") else str(it.date),
+                it.difficulty or "",
+            ])
+            yield output.getvalue()
+            output.seek(0); output.truncate(0)
+
+    headers = {"Content-Disposition": 'attachment; filename="attempts.csv"'}
+    return StreamingResponse(iter_csv(), media_type="text/csv", headers=headers)
 
 
 # -------------------- Stats --------------------

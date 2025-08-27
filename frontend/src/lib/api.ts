@@ -1,3 +1,4 @@
+// src/lib/api.ts
 export type Question = {
   id: string;
   role: string;
@@ -26,10 +27,19 @@ export type AttemptCreate = {
 export type AttemptUpdate = Partial<AttemptCreate>;
 
 type Stats = {
-  /** If you exposed /stats on the backend, shape might look like this */
   total: number;
   roles: Array<{ role: string; count: number; avg: number }>;
   last_7d: { count: number; avg: number };
+};
+
+export type Health = {
+  ok: boolean;
+  roles: string[];
+  counts: Record<string, number>;
+  questions_file: string;
+  attempts_file: string;
+  last_questions_load_ts: number;
+  server_time: number;
 };
 
 type QuestionsParams = {
@@ -44,16 +54,19 @@ type QuestionsParams = {
 /* ---------------- base + helpers ---------------- */
 
 const rawBase = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
-// ensure no trailing slash
-const API_BASE = rawBase.replace(/\/+$/, "");
+const API_BASE = rawBase.replace(/\/+$/, ""); // ensure no trailing slash
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY;
 
-/** Only attach API key for mutations (POST/PATCH/DELETE) */
+// Global defaults
+const DEFAULT_TIMEOUT = 12_000;
+const DEFAULT_RETRY = 1;
+
+/** Attach API key header for mutating requests. */
 function authHeaders() {
   return API_KEY ? { "x-api-key": API_KEY } : {};
 }
 
-/** Build a querystring without empty values */
+/** Build a querystring without empty values. */
 function qs(params: Record<string, string | undefined>) {
   const p = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
@@ -62,132 +75,191 @@ function qs(params: Record<string, string | undefined>) {
   return p.toString();
 }
 
-/** Abortable fetch with timeout */
-function fetchWithTimeout(url: string, opts: RequestInit = {}, timeoutMs = 12_000) {
+/** Abortable fetch with timeout. */
+function fetchWithTimeout(url: string, opts: RequestInit = {}, timeoutMs = DEFAULT_TIMEOUT) {
   const ctrl = new AbortController();
   const id = setTimeout(() => ctrl.abort(), timeoutMs);
-  return fetch(url, { ...opts, signal: ctrl.signal })
-    .finally(() => clearTimeout(id));
+  return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(id));
 }
 
-/** Safe response -> JSON with rich FastAPI error extraction */
-async function safe<T>(p: Promise<Response>): Promise<T> {
-  const res = await p;
-  if (!res.ok) {
-    let msg = `Request failed: ${res.status}`;
+/** Parse FastAPI error (string or JSON) into a friendly Error. */
+async function toError(res: Response): Promise<Error> {
+  let msg = `Request failed: ${res.status}`;
+  try {
+    const text = await res.text();
     try {
-      const text = await res.text();
-      try {
-        const j = JSON.parse(text);
-        if (j?.detail) {
-          msg = Array.isArray(j.detail) ? (j.detail[0]?.msg || msg) : j.detail;
-        } else {
-          msg = text || msg;
-        }
-      } catch {
+      const j = JSON.parse(text);
+      if (j?.detail) {
+        msg = Array.isArray(j.detail) ? j.detail[0]?.msg || msg : j.detail;
+      } else {
         msg = text || msg;
       }
     } catch {
-      // ignore
+      msg = text || msg;
     }
-    throw new Error(msg);
+  } catch {}
+  return new Error(msg);
+}
+
+/** Unified request helper. Handles JSON body, query, auth, retry for GET. */
+async function request<T>(
+  path: string,
+  {
+    method = "GET",
+    query,
+    body,
+    headers = {},
+    timeout = DEFAULT_TIMEOUT,
+    auth = false,
+    retry = method === "GET" ? DEFAULT_RETRY : 0,
+    cache = "no-store" as RequestCache,
+  }: {
+    method?: "GET" | "POST" | "PATCH" | "DELETE";
+    query?: Record<string, string | undefined>;
+    body?: any;
+    headers?: Record<string, string>;
+    timeout?: number;
+    auth?: boolean; // attach API key
+    retry?: number;
+    cache?: RequestCache;
+  } = {},
+): Promise<T> {
+  const url = new URL(API_BASE + path);
+  if (query) {
+    for (const [k, v] of Object.entries(query)) {
+      if (v !== undefined && v !== "") url.searchParams.set(k, v);
+    }
   }
-  // Most endpoints return JSON
-  return res.json() as Promise<T>;
+
+  const init: RequestInit = {
+    method,
+    headers: {
+      ...(auth ? authHeaders() : {}),
+      ...headers,
+    },
+    cache,
+  };
+  if (body !== undefined) {
+    init.headers = {
+      "Content-Type": "application/json",
+      ...(init.headers || {}),
+    };
+    init.body = JSON.stringify(body);
+  }
+
+  let attempt = 0;
+  while (true) {
+    attempt++;
+    const res = await fetchWithTimeout(url.toString(), init, timeout);
+    if (res.ok) {
+      // CSV export will be handled separately using fetch directly
+      return (await res.json()) as T;
+    }
+    // Only retry on network-ish failures or 5xx
+    if (attempt <= retry && (res.status >= 500 || res.status === 0)) {
+      await new Promise((r) => setTimeout(r, 200 * attempt)); // small backoff
+      continue;
+    }
+    throw await toError(res);
+  }
+}
+
+/* ---------------- Small in-memory cache for roles ---------------- */
+let rolesCache: { data: string[]; ts: number } | null = null;
+const ROLES_TTL = 5 * 60_000; // 5 minutes
+
+async function getCachedRoles(): Promise<string[]> {
+  const now = Date.now();
+  if (rolesCache && now - rolesCache.ts < ROLES_TTL) {
+    return rolesCache.data;
+  }
+  const data = await request<string[]>("/roles");
+  rolesCache = { data, ts: now };
+  return data;
 }
 
 /* ---------------- API ---------------- */
 
 export const api = {
+  /* ---- health & stats (optional) ---- */
+  health: () => request<Health>("/health"),
+  stats: () => request<Stats>("/stats"),
+
   /* ---- roles & questions ---- */
+  roles: () => getCachedRoles(),
 
-  roles: () => safe<string[]>(
-    fetchWithTimeout(`${API_BASE}/roles`, { cache: "no-store" })
-  ),
+  questions: ({ role, limit = 20, offset = 0, difficulty, shuffle, seed }: QuestionsParams) =>
+    request<Question[]>("/questions", {
+      query: {
+        role,
+        limit: String(limit),
+        offset: String(offset),
+        difficulty,
+        shuffle: shuffle ? "true" : undefined,
+        seed: seed !== undefined ? String(seed) : undefined,
+      },
+    }),
 
-  questions: ({ role, limit = 20, offset = 0, difficulty, shuffle, seed }: QuestionsParams) => {
-    const query = qs({
-      role,
-      limit: String(limit),
-      offset: String(offset),
-      difficulty,
-      shuffle: shuffle ? "true" : undefined,
-      seed: seed !== undefined ? String(seed) : undefined,
-    });
-    return safe<Question[]>(
-      fetchWithTimeout(`${API_BASE}/questions?${query}`, { cache: "no-store" })
-    );
-  },
+  nextQuestion: (role: string, index = 0, difficulty?: "easy" | "medium" | "hard") =>
+    request<Question>("/question/next", {
+      query: { role, index: String(index), difficulty },
+    }),
 
-  nextQuestion: (role: string, index = 0, difficulty?: "easy" | "medium" | "hard") => {
-    const query = qs({ role, index: String(index), difficulty });
-    return safe<Question>(
-      fetchWithTimeout(`${API_BASE}/question/next?${query}`, { cache: "no-store" })
-    );
-  },
+  randomQuestion: (role: string, difficulty?: "easy" | "medium" | "hard", seed?: number) =>
+    request<Question>("/questions/random", {
+      query: {
+        role,
+        difficulty,
+        seed: seed !== undefined ? String(seed) : undefined,
+      },
+    }),
 
-  randomQuestion: (role: string, difficulty?: "easy" | "medium" | "hard", seed?: number) => {
-    const query = qs({
-      role,
-      difficulty,
-      seed: seed !== undefined ? String(seed) : undefined,
-    });
-    return safe<Question>(
-      fetchWithTimeout(`${API_BASE}/questions/random?${query}`, { cache: "no-store" })
-    );
-  },
-
-  searchQuestions: (q: string, role?: string, limit = 20) => {
-    const query = qs({ q, role, limit: String(limit) });
-    return safe<Question[]>(
-      fetchWithTimeout(`${API_BASE}/search?${query}`, { cache: "no-store" })
-    );
-  },
+  searchQuestions: (q: string, role?: string, limit = 20) =>
+    request<Question[]>("/search", {
+      query: { q, role, limit: String(limit) },
+    }),
 
   /* ---- attempts ---- */
+  getAttempts: ({ role, limit = 100 }: { role?: string; limit?: number } = {}) =>
+    request<Attempt[]>("/attempts", {
+      query: { role, limit: String(limit) },
+    }),
 
-  getAttempts: ({ role, limit = 100 }: { role?: string; limit?: number } = {}) => {
-    const query = qs({ role, limit: String(limit) });
-    return safe<Attempt[]>(
-      fetchWithTimeout(`${API_BASE}/attempts?${query}`, { cache: "no-store" })
-    );
-  },
-
-  getAttempt: (id: string) =>
-    safe<Attempt>(
-      fetchWithTimeout(`${API_BASE}/attempts/${id}`, { cache: "no-store" })
-    ),
+  getAttempt: (id: string) => request<Attempt>(`/attempts/${id}`),
 
   createAttempt: (a: AttemptCreate) =>
-    safe<Attempt>(
-      fetchWithTimeout(`${API_BASE}/attempts`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify(a),
-      })
-    ),
+    request<Attempt>("/attempts", {
+      method: "POST",
+      body: a,
+      auth: true,
+    }),
 
   updateAttempt: (id: string, patch: AttemptUpdate) =>
-    safe<Attempt>(
-      fetchWithTimeout(`${API_BASE}/attempts/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify(patch),
-      })
-    ),
+    request<Attempt>(`/attempts/${id}`, {
+      method: "PATCH",
+      body: patch,
+      auth: true,
+    }),
 
   deleteAttempt: (id: string) =>
-    safe<{ ok: boolean; deleted: number; id: string }>(
-      fetchWithTimeout(`${API_BASE}/attempts/${id}`, {
-        method: "DELETE",
-        headers: { ...authHeaders() },
-      })
-    ),
+    request<{ ok: boolean; deleted: number; id: string }>(`/attempts/${id}`, {
+      method: "DELETE",
+      auth: true,
+    }),
 
-  /* ---- optional: aggregate stats (if backend exposes /stats) ---- */
-
-  stats: () =>
-    safe<Stats>(
-      fetchWithTimeout(`${API_BASE}/stats`, { cache: "no-store" })
-    ),
+  /* ---- Export CSV (download helper) ---- */
+  exportCSV: async ({ role }: { role?: string } = {}) => {
+    const query = role ? `?role=${encodeURIComponent(role)}` : "";
+    const res = await fetchWithTimeout(`${API_BASE}/attempts/export${query}`, {}, DEFAULT_TIMEOUT);
+    if (!res.ok) throw await toError(res);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "attempts.csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
 };

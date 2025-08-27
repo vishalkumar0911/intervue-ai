@@ -3,15 +3,25 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { LayoutDashboard, Mic, BarChart2, Settings as SettingsIcon } from "lucide-react";
+import {
+  LayoutDashboard,
+  Mic,
+  Bookmark,
+  BarChart2,
+  Settings as SettingsIcon,
+} from "lucide-react";
 import clsx from "clsx";
 
-type Item = { href: string; label: string; icon: React.ComponentType<any> };
+/** Icon components from lucide share this shape */
+type IconType = React.ComponentType<{ className?: string; size?: number | string }>;
+
+type Item = { href: string; label: string; icon: IconType };
 
 const NAV: Item[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/interview", label: "Interview", icon: Mic },
   { href: "/analytics", label: "Analytics", icon: BarChart2 },
+  { href: "/bookmarks", label: "Bookmarks", icon: Bookmark },
   { href: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
@@ -42,8 +52,7 @@ function Sidebar() {
       <ul className="mt-1 space-y-1">
         {NAV.map(({ href, label, icon: Icon }) => {
           const active =
-            pathname === href ||
-            (href !== "/" && pathname.startsWith(href + "/"));
+            pathname === href || (href !== "/" && pathname.startsWith(href + "/"));
 
           return (
             <li key={href}>
@@ -57,7 +66,12 @@ function Sidebar() {
                     : "text-slate-700 hover:bg-black/5 hover:text-slate-900 dark:text-white/80 dark:hover:bg-white/10 dark:hover:text-white"
                 )}
               >
-                <Icon size={16} className={active ? "opacity-100" : "opacity-80"} />
+                {/* lint-safe: Icon is a typed component */}
+                <Icon
+                  size={16}
+                  aria-hidden="true"
+                  className={active ? "opacity-100" : "opacity-80"}
+                />
                 <span className="truncate">{label}</span>
               </Link>
             </li>
@@ -66,11 +80,12 @@ function Sidebar() {
       </ul>
 
       <div className="mt-3 rounded-xl border border-black/10 bg-black/[0.03] px-3 py-2 text-xs text-slate-600 dark:border-white/10 dark:bg-white/5 dark:text-white/70">
-        Tip: Press <kbd className="rounded bg-black/10 px-1 dark:bg-white/10">N</kbd> for next question
+        Tip: Press <kbd className="rounded bg-black/10 px-1 dark:bg-white/10">N</kbd> for next
+        question
       </div>
     </nav>
   );
 }
 
 export { Sidebar };      // named export
-export default Sidebar;  // default export (so both import styles work)
+export default Sidebar;  // default export
