@@ -237,7 +237,7 @@ export default function DashboardPage() {
         <div>
           {/* brighter, larger title with subtle glow */}
           <h1 className="text-3xl md:text-4xl font-semibold tracking-tight">
-            <span className="bg-gradient-to-r from-brand-200 via-white to-accent-200 bg-clip-text text-transparent drop-shadow-[0_1px_6px_rgba(99,102,241,0.15)]">
+            <span className="bg-gradient-to-r from-white via-white to-white bg-clip-text text-transparent drop-shadow-[0_2px_8px_rgba(0,0,0,0.25)]">
               Welcome back
             </span>
           </h1>

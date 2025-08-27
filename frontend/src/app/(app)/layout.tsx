@@ -1,20 +1,29 @@
-// src/app/(app)/layout.tsx
-import type { ReactNode } from "react";
-import Sidebar from "@/components/shell/Sidebar";
+"use client";
 
+import React from "react";
+import Sidebar, { SidebarTrigger, useSidebar } from "@/components/shell/Sidebar";
 
-export default function AppLayout({ children }: { children: ReactNode }) {
+function LayoutInner({ children }: { children: React.ReactNode }) {
+  const { collapsed } = useSidebar();
+  const style = { ["--sb" as any]: collapsed ? "72px" : "260px" };
+
   return (
-    <div className="grid gap-6 md:grid-cols-[16rem,1fr]">
-      <aside className="hidden md:block" role="complementary" aria-label="Primary navigation">
-        <div className="sticky top-[56px]">
-          <Sidebar />
+    <div
+      className="mx-auto max-w-7xl gap-4 px-4 py-4 md:grid md:grid-cols-[var(--sb)_1fr]"
+      style={style}
+    >
+      <Sidebar />
+      <div>
+        <div className="mb-3 flex items-center justify-between md:hidden">
+          <SidebarTrigger />
         </div>
-      </aside>
-
-      <section className="min-w-0 px-2 sm:px-0">
         {children}
-      </section>
+      </div>
     </div>
   );
+}
+
+export default function AppLayout({ children }: { children: React.ReactNode }) {
+  // Provider is at RootLayout; just render.
+  return <LayoutInner>{children}</LayoutInner>;
 }

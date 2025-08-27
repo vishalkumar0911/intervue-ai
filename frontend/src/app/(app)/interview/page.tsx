@@ -376,7 +376,7 @@ export default function InterviewPage() {
             className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-white/80 hover:bg-white/10"
             title="Copy question"
           >
-            <Copy className="h-4 w-4" /> Copy
+            <Copy className="h-4 w-4" />Copy Ques.
           </button>
 
           <button
