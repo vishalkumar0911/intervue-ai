@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState } from "react";
+import React, { createContext, useContext, useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
@@ -13,6 +13,7 @@ import {
   Menu,
   ChevronLeft,
   ChevronRight,
+  X,
 } from "lucide-react";
 
 /* ----------------------------- context & hook ----------------------------- */
@@ -35,9 +36,24 @@ export function useSidebar(): SidebarContextType {
 
 /* ------------------------------- provider -------------------------------- */
 
+const COLLAPSE_KEY = "ui:sidebar:collapsed";
+
 export function SidebarProvider({ children }: { children: React.ReactNode }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem(COLLAPSE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
   const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(COLLAPSE_KEY, collapsed ? "1" : "0");
+    } catch {}
+  }, [collapsed]);
 
   const value: SidebarContextType = {
     collapsed,
@@ -57,7 +73,7 @@ export function SidebarTrigger() {
   return (
     <button
       onClick={toggle}
-      className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-white/80 hover:bg-white/10 dark:text-white/80"
+      className="inline-flex h-9 items-center gap-2 rounded-xl border border-border bg-secondary/60 px-3 text-sm text-foreground hover:bg-secondary focus-ring"
       aria-label="Open navigation"
     >
       <Menu className="h-4 w-4" />
@@ -79,71 +95,141 @@ const NAV: Item[] = [
   { href: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
-function SidebarInner() {
-  const { collapsed, collapse, expand } = useSidebar();
+function NavList({ collapsed }: { collapsed: boolean }) {
   const pathname = usePathname();
+
+  return (
+    <ul className="mt-1 space-y-1" role="list">
+      {NAV.map(({ href, label, icon: Icon }) => {
+        const active = pathname === href || (href !== "/" && pathname.startsWith(href + "/"));
+        return (
+          <li key={href}>
+            <Link
+              href={href}
+              title={collapsed ? label : undefined}
+              aria-current={active ? "page" : undefined}
+              className={clsx(
+                "group flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors focus-ring",
+                active
+                  ? "bg-secondary text-foreground"
+                  : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+              )}
+            >
+              <Icon size={16} className={active ? "opacity-100" : "opacity-80"} />
+              {!collapsed && <span className="truncate">{label}</span>}
+            </Link>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function DesktopSidebar() {
+  const { collapsed, collapse, expand } = useSidebar();
 
   return (
     <aside
       className={clsx(
-        "relative rounded-2xl p-3",
-        "border border-black/10 bg-white text-slate-900 shadow-sm",
-        "dark:border-white/10 dark:bg-white/5 dark:text-white",
+        "relative hidden md:block",
+        "sticky top-24 h-[calc(100vh-6rem)] overflow-y-auto nice-scrollbar",
         "transition-[width] duration-300 ease-in-out",
-        collapsed ? "w-[72px]" : "w-[260px]",
-        "hidden md:block"
+        collapsed ? "w-[72px]" : "w-[264px]"
       )}
+      aria-label="Primary"
     >
-      {/* collapse / expand button */}
-      <button
-        onClick={collapsed ? expand : collapse}
-        className="absolute -right-3 top-4 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
-        aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-      >
-        {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
-      </button>
+      <div className="surface h-full p-3">
+        {/* collapse / expand button */}
+        <button
+          onClick={collapsed ? expand : collapse}
+          className="absolute -right-3 top-4 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-border bg-secondary/60 hover:bg-secondary focus-ring"
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-expanded={!collapsed}
+        >
+          {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+        </button>
 
-      {/* Header (no ThemeToggle) */}
-      <div className="flex items-center gap-3 px-2 pb-3">
-        <div className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-brand-500 to-accent-500 text-white">
-          <span className="font-semibold">I</span>
+        {/* Header */}
+        <div className="flex items-center gap-3 px-2 pb-3">
+          <div className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-brand-500 to-accent-500 text-primary-foreground">
+            <span className="font-semibold">I</span>
+          </div>
+          {!collapsed && <div className="font-semibold text-foreground">Intervue.AI</div>}
         </div>
-        {!collapsed && <div className="font-semibold">Intervue.AI</div>}
-      </div>
 
-      {/* Links */}
-      <ul className="mt-1 space-y-1">
-        {NAV.map(({ href, label, icon: Icon }) => {
-          const active = pathname === href || (href !== "/" && pathname.startsWith(href + "/"));
-          return (
-            <li key={href}>
-              <Link
-                href={href}
-                aria-current={active ? "page" : undefined}
-                className={clsx(
-                  "group flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors",
-                  active
-                    ? "bg-black/5 text-slate-900 dark:bg-white/10 dark:text-white"
-                    : "text-slate-700 hover:bg-black/5 hover:text-slate-900 dark:text-white/80 dark:hover:bg-white/10 dark:hover:text-white"
-                )}
-              >
-                <Icon size={16} className={active ? "opacity-100" : "opacity-80"} />
-                {!collapsed && <span className="truncate">{label}</span>}
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
+        <NavList collapsed={collapsed} />
 
-      {/* Small tip at the bottom */}
-      <div className="mt-3 rounded-xl border border-black/10 bg-black/[0.03] px-3 py-2 text-xs text-slate-600 dark:border-white/10 dark:bg-white/5 dark:text-white/70">
-        Tip: Press <kbd className="rounded bg-black/10 px-1 dark:bg-white/10">N</kbd> for next question
+        {/* Tip */}
+        <div className="mt-3 rounded-xl border border-border bg-secondary/60 px-3 py-2 text-xs text-muted-foreground">
+          Tip: Press <kbd className="rounded bg-muted px-1">N</kbd> for next question
+        </div>
       </div>
     </aside>
   );
 }
 
-/** Default export */
+function MobileDrawer() {
+  const { open, toggle } = useSidebar();
+  const pathname = usePathname();
+
+  // Close on route change or ESC
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && toggle();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, toggle]);
+
+  useEffect(() => {
+    if (open) toggle();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname]);
+
+  if (!open) return null;
+
+  return (
+    <>
+      <div
+        className="fixed inset-0 z-[95] bg-black/40 backdrop-blur-sm"
+        onClick={toggle}
+        aria-hidden
+      />
+      <aside
+        className="fixed left-0 top-0 z-[100] h-svh w-[280px] p-3 md:hidden"
+        aria-label="Mobile navigation"
+      >
+        <div className="surface h-full">
+          <div className="flex items-center justify-between px-2 pb-3 pt-2">
+            <div className="flex items-center gap-2">
+              <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-brand-500 to-accent-500 text-primary-foreground">
+                <span className="font-semibold">I</span>
+              </div>
+              <span className="font-semibold">Intervue.AI</span>
+            </div>
+            <button
+              onClick={toggle}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-secondary/60 hover:bg-secondary focus-ring"
+              aria-label="Close navigation"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <nav aria-label="Primary">
+            <NavList collapsed={false} />
+          </nav>
+        </div>
+      </aside>
+    </>
+  );
+}
+
+/** Default export: renders both desktop sidebar and mobile drawer */
 export default function Sidebar() {
-  return <SidebarInner />;
+  return (
+    <>
+      <DesktopSidebar />
+      <MobileDrawer />
+    </>
+  );
 }

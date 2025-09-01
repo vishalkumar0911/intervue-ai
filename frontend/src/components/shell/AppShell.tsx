@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 // ⬇️ make sure this path matches where Sidebar.tsx lives
-import { Sidebar } from "@/components/shell/Sidebar";
+import Sidebar  from "@/components/shell/Sidebar";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(true);
