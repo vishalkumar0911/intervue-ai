@@ -10,6 +10,8 @@ import time
 import uuid
 from collections import defaultdict, deque
 from datetime import datetime
+from datetime import timezone
+from app.models import Question, AttemptCreate, Attempt, AttemptUpdate
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from uuid import UUID
@@ -81,38 +83,6 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=500)
 
 
-# -------------------- Models --------------------
-class Question(BaseModel):
-    id: str
-    role: str
-    text: str
-    topic: Optional[str] = None
-    difficulty: Optional[str] = "easy"
-
-
-# Attempts: support optional difficulty (so Analytics can stack by difficulty)
-class AttemptCreate(BaseModel):
-    role: str
-    score: int = Field(ge=0, le=100)
-    duration_min: int = Field(ge=0)
-    date: Optional[datetime] = None  # allow client to provide, otherwise now()
-    difficulty: Optional[str] = Field(
-        default=None,
-        description="Optional tag: easy|medium|hard",
-    )
-
-
-class Attempt(AttemptCreate):
-    id: str
-    date: datetime  # required in stored model
-
-
-class AttemptUpdate(BaseModel):
-    role: Optional[str] = None
-    score: Optional[int] = Field(default=None, ge=0, le=100)
-    duration_min: Optional[int] = Field(default=None, ge=0)
-    date: Optional[datetime] = None
-    difficulty: Optional[str] = None
 
 
 # -------------------- Data loading --------------------
@@ -172,15 +142,11 @@ def startup() -> None:
 
 # -------------------- Security & Rate limiting --------------------
 def require_api_key(request: Request):
-    """
-    Optional API key guard for MUTATING endpoints.
-    If BACKEND_API_KEY is unset, allow everything (dev mode).
-    """
     if not settings.BACKEND_API_KEY:
-        return  # no-op
+        return
     key = request.headers.get("x-api-key") or request.query_params.get("api_key")
     if not key or key != settings.BACKEND_API_KEY:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing API key")
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 # per-IP sliding window limiter {ip -> deque[timestamps]}
@@ -493,7 +459,7 @@ def add_attempt(payload: AttemptCreate = Body(...)):
         role=payload.role,
         score=payload.score,
         duration_min=payload.duration_min,
-        date=payload.date or datetime.utcnow(),
+        date = payload.date or datetime.now(timezone.utc),
         difficulty=payload.difficulty,
     )
     try:
@@ -627,7 +593,7 @@ def dev_seed(
             role=r,
             score=rng.randint(35, 95),
             duration_min=rng.randint(8, 32),
-            date=datetime.utcnow(),
+            date=datetime.now(timezone.utc),
             difficulty=rng.choice(["easy", "medium", "hard"]),
         )
         _append_attempt_jsonl(attempt)

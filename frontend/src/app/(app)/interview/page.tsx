@@ -298,9 +298,13 @@ export default function InterviewPage() {
     if (!role) { toast.error("Pick a role first"); return; }
     const minutes = Math.max(1, Math.round((Date.now() - startedAtRef.current) / 60000));
     const payload: AttemptCreate = {
-      role, score, duration_min: minutes, date: new Date().toISOString(),
+      role,
+      score,
+      duration_min: minutes,
       difficulty: (difficulty || undefined) as any,
-    };
+      // omit date -> server sets UTC now()
+};
+
     try {
       await api.createAttempt(payload);
       toast.success("Session saved");

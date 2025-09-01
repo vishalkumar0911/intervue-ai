@@ -1,4 +1,7 @@
 // src/lib/api.ts
+
+/* ---------------- Types ---------------- */
+
 export type Question = {
   id: string;
   role: string;
@@ -20,16 +23,17 @@ export type AttemptCreate = {
   role: string;
   score: number;
   duration_min: number;
-  date?: string; // optional; server sets if missing
+  date?: string;
   difficulty?: "easy" | "medium" | "hard";
 };
 
 export type AttemptUpdate = Partial<AttemptCreate>;
 
 type Stats = {
-  total: number;
-  roles: Array<{ role: string; count: number; avg: number }>;
-  last_7d: { count: number; avg: number };
+  questions_per_role: Record<string, number>;
+  attempts_total: number;
+  attempts_by_role: Record<string, number>;
+  attempts_by_difficulty: Record<string, number>;
 };
 
 export type Health = {
@@ -51,49 +55,63 @@ type QuestionsParams = {
   seed?: number;
 };
 
-/* ---------------- base + helpers ---------------- */
+/* ---------------- Base + mode detection ---------------- */
 
-const rawBase = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
-const API_BASE = rawBase.replace(/\/+$/, ""); // ensure no trailing slash
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY;
+/**
+ * Two modes:
+ * 1) Direct mode (default when FASTAPI_URL / NEXT_PUBLIC_API_BASE_URL is set):
+ *    -> Hit FastAPI directly and attach x-api-key for mutating endpoints.
+ * 2) Proxy mode (no FASTAPI/NEXT_PUBLIC base provided OR NEXT_PUBLIC_USE_NEXT_PROXY=true):
+ *    -> Call same-origin Next.js routes under /api/* (no browser key).
+ */
+const DIRECT_BASE =
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  process.env.FASTAPI_URL ||
+  ""; // empty => proxy mode unless forced
+
+const FORCE_PROXY = process.env.NEXT_PUBLIC_USE_NEXT_PROXY === "true";
+const USE_PROXY = FORCE_PROXY || !DIRECT_BASE; // true => use /api/* routes
+
+const API_BASE = USE_PROXY ? "" : DIRECT_BASE.replace(/\/+$/, "");
+const API_KEY =
+  process.env.NEXT_PUBLIC_API_KEY || process.env.FASTAPI_API_KEY || "";
+
+// Prefix helper: adds /api in proxy mode, otherwise returns path unchanged
+const p = (path: string) => (USE_PROXY ? `/api${path}` : path);
+
+// In direct mode we must attach the key for mutating calls
+const SHOULD_ATTACH_KEY = !USE_PROXY && !!API_KEY;
 
 // Global defaults
 const DEFAULT_TIMEOUT = 12_000;
 const DEFAULT_RETRY = 1;
 
-/** Attach API key header for mutating requests. */
-function authHeaders() {
-  return API_KEY ? { "x-api-key": API_KEY } : {};
-}
+/* ---------------- Helpers ---------------- */
 
-/** Build a querystring without empty values. */
 function qs(params: Record<string, string | undefined>) {
-  const p = new URLSearchParams();
+  const u = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined && v !== "") p.set(k, v);
+    if (v !== undefined && v !== "") u.set(k, v);
   }
-  return p.toString();
+  const s = u.toString();
+  return s ? `?${s}` : "";
 }
 
-/** Abortable fetch with timeout. */
 function fetchWithTimeout(url: string, opts: RequestInit = {}, timeoutMs = DEFAULT_TIMEOUT) {
   const ctrl = new AbortController();
   const id = setTimeout(() => ctrl.abort(), timeoutMs);
   return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(id));
 }
 
-/** Parse FastAPI error (string or JSON) into a friendly Error. */
 async function toError(res: Response): Promise<Error> {
   let msg = `Request failed: ${res.status}`;
   try {
     const text = await res.text();
     try {
       const j = JSON.parse(text);
-      if (j?.detail) {
-        msg = Array.isArray(j.detail) ? j.detail[0]?.msg || msg : j.detail;
-      } else {
-        msg = text || msg;
-      }
+      if (j?.detail) msg = Array.isArray(j.detail) ? j.detail[0]?.msg || msg : j.detail;
+      else if (j?.error) msg = j.error || msg;
+      else msg = text || msg;
     } catch {
       msg = text || msg;
     }
@@ -101,7 +119,6 @@ async function toError(res: Response): Promise<Error> {
   return new Error(msg);
 }
 
-/** Unified request helper. Handles JSON body, query, auth, retry for GET. */
 async function request<T>(
   path: string,
   {
@@ -110,70 +127,62 @@ async function request<T>(
     body,
     headers = {},
     timeout = DEFAULT_TIMEOUT,
-    auth = false,
     retry = method === "GET" ? DEFAULT_RETRY : 0,
     cache = "no-store" as RequestCache,
+    auth = false, // if true, attach x-api-key (only in direct mode)
   }: {
     method?: "GET" | "POST" | "PATCH" | "DELETE";
     query?: Record<string, string | undefined>;
     body?: any;
     headers?: Record<string, string>;
     timeout?: number;
-    auth?: boolean; // attach API key
     retry?: number;
     cache?: RequestCache;
+    auth?: boolean;
   } = {},
 ): Promise<T> {
-  const url = new URL(API_BASE + path);
-  if (query) {
-    for (const [k, v] of Object.entries(query)) {
-      if (v !== undefined && v !== "") url.searchParams.set(k, v);
-    }
-  }
+  const urlStr = `${API_BASE}${path}${query ? qs(query) : ""}`;
 
   const init: RequestInit = {
     method,
     headers: {
-      ...(auth ? authHeaders() : {}),
+      ...(auth && SHOULD_ATTACH_KEY ? { "x-api-key": API_KEY } : {}),
       ...headers,
     },
     cache,
   };
+
   if (body !== undefined) {
-    init.headers = {
-      "Content-Type": "application/json",
-      ...(init.headers || {}),
-    };
+    init.headers = { "Content-Type": "application/json", ...(init.headers || {}) };
     init.body = JSON.stringify(body);
   }
 
   let attempt = 0;
   while (true) {
     attempt++;
-    const res = await fetchWithTimeout(url.toString(), init, timeout);
+    const res = await fetchWithTimeout(urlStr, init, timeout);
     if (res.ok) {
-      // CSV export will be handled separately using fetch directly
+      const ct = res.headers.get("content-type") || "";
+      if (ct.includes("application/json")) return (await res.json()) as T;
+      // callers of request<T> expect JSON
       return (await res.json()) as T;
     }
-    // Only retry on network-ish failures or 5xx
     if (attempt <= retry && (res.status >= 500 || res.status === 0)) {
-      await new Promise((r) => setTimeout(r, 200 * attempt)); // small backoff
+      await new Promise((r) => setTimeout(r, 200 * attempt));
       continue;
     }
     throw await toError(res);
   }
 }
 
-/* ---------------- Small in-memory cache for roles ---------------- */
+/* ---------------- Small roles cache ---------------- */
 let rolesCache: { data: string[]; ts: number } | null = null;
-const ROLES_TTL = 5 * 60_000; // 5 minutes
+const ROLES_TTL = 5 * 60_000;
 
 async function getCachedRoles(): Promise<string[]> {
   const now = Date.now();
-  if (rolesCache && now - rolesCache.ts < ROLES_TTL) {
-    return rolesCache.data;
-  }
-  const data = await request<string[]>("/roles");
+  if (rolesCache && now - rolesCache.ts < ROLES_TTL) return rolesCache.data;
+  const data = await request<string[]>(p("/roles"));
   rolesCache = { data, ts: now };
   return data;
 }
@@ -181,15 +190,15 @@ async function getCachedRoles(): Promise<string[]> {
 /* ---------------- API ---------------- */
 
 export const api = {
-  /* ---- health & stats (optional) ---- */
-  health: () => request<Health>("/health"),
-  stats: () => request<Stats>("/stats"),
+  /* health & stats */
+  health: () => request<Health>(p("/health")),
+  stats: () => request<Stats>(p("/stats")),
 
-  /* ---- roles & questions ---- */
+  /* roles & questions */
   roles: () => getCachedRoles(),
 
   questions: ({ role, limit = 20, offset = 0, difficulty, shuffle, seed }: QuestionsParams) =>
-    request<Question[]>("/questions", {
+    request<Question[]>(p("/questions"), {
       query: {
         role,
         limit: String(limit),
@@ -201,65 +210,62 @@ export const api = {
     }),
 
   nextQuestion: (role: string, index = 0, difficulty?: "easy" | "medium" | "hard") =>
-    request<Question>("/question/next", {
+    request<Question>(p("/question/next"), {
       query: { role, index: String(index), difficulty },
     }),
 
   randomQuestion: (role: string, difficulty?: "easy" | "medium" | "hard", seed?: number) =>
-    request<Question>("/questions/random", {
-      query: {
-        role,
-        difficulty,
-        seed: seed !== undefined ? String(seed) : undefined,
-      },
+    request<Question>(p("/questions/random"), {
+      query: { role, difficulty, seed: seed !== undefined ? String(seed) : undefined },
     }),
 
   searchQuestions: (q: string, role?: string, limit = 20) =>
-    request<Question[]>("/search", {
+    request<Question[]>(p("/search"), {
       query: { q, role, limit: String(limit) },
     }),
 
-  /* ---- attempts ---- */
+  /* attempts */
   getAttempts: ({ role, limit = 100 }: { role?: string; limit?: number } = {}) =>
-    request<Attempt[]>("/attempts", {
+    request<Attempt[]>(p("/attempts"), {
       query: { role, limit: String(limit) },
     }),
 
-  getAttempt: (id: string) => request<Attempt>(`/attempts/${id}`),
+  getAttempt: (id: string) => request<Attempt>(p(`/attempts/${id}`)),
 
   createAttempt: (a: AttemptCreate) =>
-    request<Attempt>("/attempts", {
+    request<Attempt>(p("/attempts"), {
       method: "POST",
       body: a,
-      auth: true,
+      auth: true, // attach x-api-key only in direct mode
     }),
 
   updateAttempt: (id: string, patch: AttemptUpdate) =>
-    request<Attempt>(`/attempts/${id}`, {
+    request<Attempt>(p(`/attempts/${id}`), {
       method: "PATCH",
       body: patch,
       auth: true,
     }),
 
   deleteAttempt: (id: string) =>
-    request<{ ok: boolean; deleted: number; id: string }>(`/attempts/${id}`, {
+    request<{ ok: boolean; deleted: number; id: string }>(p(`/attempts/${id}`), {
       method: "DELETE",
       auth: true,
     }),
 
-  /* ---- Export CSV (download helper) ---- */
+  /* export CSV */
   exportCSV: async ({ role }: { role?: string } = {}) => {
-    const query = role ? `?role=${encodeURIComponent(role)}` : "";
-    const res = await fetchWithTimeout(`${API_BASE}/attempts/export${query}`, {}, DEFAULT_TIMEOUT);
+    const q = role ? `?role=${encodeURIComponent(role)}` : "";
+    const url = `${API_BASE}${p("/attempts/export")}${q}`;
+    const res = await fetchWithTimeout(url, {}, DEFAULT_TIMEOUT);
     if (!res.ok) throw await toError(res);
     const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
+    const objectUrl = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url;
+    a.href = objectUrl;
     a.download = "attempts.csv";
     document.body.appendChild(a);
     a.click();
     a.remove();
-    URL.revokeObjectURL(url);
+    URL.revokeObjectURL(objectUrl);
   },
 };

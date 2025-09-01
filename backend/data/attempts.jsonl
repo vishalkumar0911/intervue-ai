@@ -1,6 +1,12 @@
-{"role": "Frontend Developer", "score": 85, "duration_min": 22, "date": "2025-08-24T10:30:00", "difficulty": null, "id": "a8ce31f7-31cc-4409-ba81-d664e1347f47"}
-{"role": "Human Resources Manager", "score": 96, "duration_min": 1, "date": "2025-08-24T19:46:19.163000+00:00", "difficulty": null, "id": "e1b27291-5a23-4fd4-8c71-c9b82fcc9042"}
-{"role": "Software Engineer", "score": 49, "duration_min": 1, "date": "2025-08-25T06:59:37.547000+00:00", "difficulty": "easy", "id": "8f4d04f5-aa66-402a-9900-08e5fe4040fa"}
-{"role": "Backend Developer", "score": 98, "duration_min": 1, "date": "2025-08-27 22:41:39.197000+00:00", "difficulty": null, "id": "818a6373-3af7-46b6-92f9-2ca8605caf29"}
-{"role": "UI/UX Designer", "score": 64, "duration_min": 24, "date": "2025-08-27 22:55:51.380334", "difficulty": "medium", "id": "3beda048-cb9b-49a2-8c7e-fb09816aaf71"}
-{"role": "UI/UX Designer", "score": 71, "duration_min": 19, "date": "2025-08-27 22:56:04.457155", "difficulty": "hard", "id": "e23e3474-5905-4d3a-86ee-66216e571ba3"}
+{"role": "Frontend Developer", "score": 85, "duration_min": 22, "date": "2025-08-24T10:30:00Z", "difficulty": null, "id": "a8ce31f7-31cc-4409-ba81-d664e1347f47"}
+{"role": "Human Resources Manager", "score": 96, "duration_min": 1, "date": "2025-08-24T19:46:19.163000Z", "difficulty": null, "id": "e1b27291-5a23-4fd4-8c71-c9b82fcc9042"}
+{"role": "Backend Developer", "score": 98, "duration_min": 1, "date": "2025-08-27T22:41:39.197000Z", "difficulty": null, "id": "818a6373-3af7-46b6-92f9-2ca8605caf29"}
+{"role": "Data Scientist", "score": 75, "duration_min": 1, "date": "2025-08-28T20:16:39.631000Z", "difficulty": null, "id": "3363c08f-efc8-467f-8376-38dd432fb1c1"}
+{"role": "Backend Developer", "score": 72, "duration_min": 21, "date": "2025-08-29T05:20:23.570620Z", "difficulty": "hard", "id": "3f5306cb-0a89-43c4-9ab6-403218b053e9"}
+{"role": "Frontend Developer", "score": 92, "duration_min": 16, "date": "2025-08-29T05:20:42.122071Z", "difficulty": "hard", "id": "f3c9cf7b-98ea-4704-b593-6aa8f0c6fb7e"}
+{"role": "Human Resources Manager", "score": 85, "duration_min": 23, "date": "2025-08-29T05:20:57.726491Z", "difficulty": "hard", "id": "adbd5fbe-8c0a-4dda-87ef-d8f3d0463f4c"}
+{"role": "Data Scientist", "score": 72, "duration_min": 27, "date": "2025-08-29T05:21:16.893946Z", "difficulty": "medium", "id": "8cc937c4-af77-4c61-b493-fefb04ba1d73"}
+{"role": "Frontend Developer", "score": 75, "duration_min": 2, "date": "2025-08-29T06:23:24.370000Z", "difficulty": "medium", "id": "d1efaecb-2110-4752-a126-99e56f727257"}
+{"role": "Frontend Developer", "score": 80, "duration_min": 10, "date": "2025-09-01T10:41:51.666812Z", "difficulty": null, "id": "28b0596d-4846-4f56-8539-39402989bdb7"}
+{"role": "Frontend Developer", "score": 80, "duration_min": 10, "date": "2025-09-01T10:46:34.515941Z", "difficulty": null, "id": "c9710b5c-a06e-4fff-8581-aee4e484d69f"}
+{"role": "Frontend Developer", "score": 88, "duration_min": 10, "date": "2025-09-01 11:48:02.881240+00:00", "difficulty": "medium", "id": "da24abe2-1818-42d1-a1b7-401eb73a8790"}
