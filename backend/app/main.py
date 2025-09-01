@@ -190,9 +190,7 @@ def _to_iso_z(val: Any) -> str:
     """
     dt = _parse_dt(val)
     if dt is None:
-        # if it's a naive datetime somewhere as string like "2025-09-01 12:00:00"
         try:
-            # last-resort: let python str() pass through
             return str(val)
         except Exception:
             return ""
@@ -212,7 +210,6 @@ def _replace_with_retry(src: Path, dst: Path, attempts: int = 8, delay: float = 
             return
         except PermissionError:
             time.sleep(delay * (i + 1))
-    # last try (surface the error)
     os.replace(src, dst)
 
 # -------------------- Helpers --------------------
@@ -237,6 +234,9 @@ def _append_attempt_jsonl(a: Attempt) -> None:
     with ATTEMPTS_LOCK:
         with p.open("a", encoding="utf-8", newline="\n") as f:
             f.write(body + "\n")
+            # optional: ensure durability after append
+            f.flush()
+            os.fsync(f.fileno())
 
 def _read_attempts_jsonl(limit: int = 100, role: Optional[str] = None) -> List[Attempt]:
     p = attempts_path()
@@ -252,7 +252,6 @@ def _read_attempts_jsonl(limit: int = 100, role: Optional[str] = None) -> List[A
                 rec = json.loads(line)
                 if role and rec.get("role") != role:
                     continue
-                # keep whatever 'date' is; model may coerce
                 out.append(Attempt(**rec))
             except Exception:
                 continue
@@ -282,13 +281,15 @@ def _rewrite_attempts_jsonl(transform: Callable[[dict], Optional[dict]]) -> int:
                     continue
                 new_rec = transform(rec)
                 if new_rec is not None:
-                    # normalize date on write
                     if "date" in new_rec:
                         new_rec["date"] = _to_iso_z(new_rec["date"])
                     else:
                         new_rec["date"] = _to_iso_z(datetime.now(timezone.utc))
                     fout.write(json.dumps(new_rec, ensure_ascii=False, separators=(",", ":")) + "\n")
                     count += 1
+            # ensure data is on disk before replace (Windows safety)
+            fout.flush()
+            os.fsync(fout.fileno())
         _replace_with_retry(tmp, p)
     return count
 
@@ -498,7 +499,7 @@ def add_attempt(payload: AttemptCreate = Body(...)):
         role=payload.role,
         score=payload.score,
         duration_min=payload.duration_min,
-        date=payload.date or datetime.now(timezone.utc),
+        date=payload.date or datetime.now(timezone.utc),  # timezone-aware UTC
         difficulty=payload.difficulty,
     )
     try:
