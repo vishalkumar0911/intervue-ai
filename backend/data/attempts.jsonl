@@ -1,6 +1,5 @@
-{"role": "Frontend Developer", "score": 85, "duration_min": 22, "date": "2025-08-24T10:30:00", "difficulty": null, "id": "a8ce31f7-31cc-4409-ba81-d664e1347f47"}
-{"role": "Human Resources Manager", "score": 96, "duration_min": 1, "date": "2025-08-24T19:46:19.163000+00:00", "difficulty": null, "id": "e1b27291-5a23-4fd4-8c71-c9b82fcc9042"}
-{"role": "Software Engineer", "score": 49, "duration_min": 1, "date": "2025-08-25T06:59:37.547000+00:00", "difficulty": "easy", "id": "8f4d04f5-aa66-402a-9900-08e5fe4040fa"}
-{"role": "Backend Developer", "score": 98, "duration_min": 1, "date": "2025-08-27 22:41:39.197000+00:00", "difficulty": null, "id": "818a6373-3af7-46b6-92f9-2ca8605caf29"}
-{"role": "UI/UX Designer", "score": 64, "duration_min": 24, "date": "2025-08-27 22:55:51.380334", "difficulty": "medium", "id": "3beda048-cb9b-49a2-8c7e-fb09816aaf71"}
-{"role": "UI/UX Designer", "score": 71, "duration_min": 19, "date": "2025-08-27 22:56:04.457155", "difficulty": "hard", "id": "e23e3474-5905-4d3a-86ee-66216e571ba3"}
+{"role":"Frontend Developer","score":92,"duration_min":16,"date":"2025-08-29T05:20:42.122071Z","difficulty":"hard","id":"f3c9cf7b-98ea-4704-b593-6aa8f0c6fb7e"}
+{"role":"Software Engineer","score":2,"duration_min":1,"date":"2025-09-01T13:46:29.656937Z","difficulty":"hard","id":"368c8caa-47d0-4bd3-a722-36e08a018a72"}
+{"role":"Backend Developer","score":72,"duration_min":15,"date":"2025-09-01T14:21:16.417495Z","difficulty":"hard","id":"38e73732-7081-41ed-8d2e-13a6e659e66d"}
+{"role":"DevOps Engineer","score":92,"duration_min":28,"date":"2025-09-01T14:23:18.423777Z","difficulty":"hard","id":"6ffce97d-882b-4328-b1ad-4f612b3a05d4"}
+{"role":"Backend Developer","score":76,"duration_min":17,"date":"2025-09-01T14:59:07.968127Z","difficulty":"medium","id":"b288c9be-3d6c-4a5e-90ab-687c3a6c56c9"}
