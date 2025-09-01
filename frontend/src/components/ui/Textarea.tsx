@@ -1,49 +1,42 @@
-// src/components/ui/Input.tsx
+// src/components/ui/Textarea.tsx
 "use client";
 
 import * as React from "react";
 import clsx from "clsx";
 
-type Props = React.InputHTMLAttributes<HTMLInputElement> & {
+type Props = React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
   label?: string;
   error?: string;
 };
 
-export const Input = React.forwardRef<HTMLInputElement, Props>(
+export const Textarea = React.forwardRef<HTMLTextAreaElement, Props>(
   ({ label, error, className, disabled, ...props }, ref) => {
     const ariaInvalid = Boolean(error) || props["aria-invalid"];
 
     return (
       <label className="block">
         {label && (
-          <span className="mb-1 block text-sm text-muted-foreground">
-            {label}
-          </span>
+          <span className="mb-1 block text-sm text-muted-foreground">{label}</span>
         )}
 
-        <input
+        <textarea
           ref={ref}
-          aria-invalid={ariaInvalid || undefined}
           disabled={disabled}
+          aria-invalid={ariaInvalid || undefined}
           {...props}
           className={clsx(
-            // base
-            "w-full rounded-xl px-3 py-2 text-sm",
-            // tokens
+            "w-full rounded-xl px-3 py-2 text-sm resize-y",
             "border border-input bg-transparent text-foreground placeholder:text-muted-foreground/70",
-            // focus + disabled + error
             "focus-ring disabled:cursor-not-allowed disabled:opacity-60",
             "aria-invalid:border-destructive aria-invalid:ring-destructive/30",
             className
           )}
         />
 
-        {error && (
-          <div className="mt-1 text-xs text-destructive">{error}</div>
-        )}
+        {error && <div className="mt-1 text-xs text-destructive">{error}</div>}
       </label>
     );
   }
 );
 
-Input.displayName = "Input";
+Textarea.displayName = "Textarea";

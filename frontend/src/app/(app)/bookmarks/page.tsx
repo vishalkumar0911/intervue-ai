@@ -3,8 +3,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Trash2, Copy, Play, Upload, Download, X } from "lucide-react";
+import { Trash2, Copy, Play, Upload, Download, X, Search } from "lucide-react";
 import { toast } from "sonner";
+
 import type { Bookmark } from "@/lib/bookmarks";
 import {
   getBookmarks,
@@ -14,15 +15,42 @@ import {
   importBookmarksFromRows,
   parseCSV,
 } from "@/lib/bookmarks";
-import { Card } from "@/components/Card";
 
-function RoleChip({ label }: { label: string }) {
+import { Card } from "@/components/Card";
+import { Button } from "@/components/ui/Button";
+import { Badge } from "@/components/ui/Badge";
+
+/* ------------------------------ tiny helpers ------------------------------ */
+
+function Chip({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
   return (
-    <span className="rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-white/80">
+    <button
+      onClick={onClick}
+      className={[
+        "rounded-xl px-3 py-1.5 text-xs transition-colors border focus-ring",
+        active
+          ? "bg-primary/20 text-foreground border-primary/30"
+          : "bg-secondary/60 text-muted-foreground border-border hover:bg-secondary",
+      ].join(" ")}
+    >
       {label}
-    </span>
+    </button>
   );
 }
+
+function RolePill({ label }: { label: string }) {
+  return <Badge variant="neutral">{label}</Badge>;
+}
+
+/* ---------------------------------- page ---------------------------------- */
 
 export default function BookmarksPage() {
   const router = useRouter();
@@ -32,9 +60,14 @@ export default function BookmarksPage() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   function load() {
-    setList(getBookmarks());
+    // newest first if we have a created timestamp; otherwise keep as-is
+    const data = getBookmarks();
+    data.sort((a, b) => (b.created ?? 0) - (a.created ?? 0));
+    setList(data);
   }
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+  }, []);
 
   const roles = useMemo(
     () => Array.from(new Set(list.map((b) => b.role))).sort(),
@@ -55,13 +88,13 @@ export default function BookmarksPage() {
     return out;
   }, [list, roleFilter, search]);
 
-  function remove(b: Bookmark) {
+  function onRemove(b: Bookmark) {
     removeBookmark(b.id);
     setList((prev) => prev.filter((x) => x.id !== b.id));
     toast("Removed bookmark");
   }
 
-  function copy(b: Bookmark) {
+  function onCopy(b: Bookmark) {
     navigator.clipboard.writeText(b.text).then(
       () => toast.success("Copied"),
       () => toast.error("Copy failed")
@@ -92,72 +125,112 @@ export default function BookmarksPage() {
     toast("Cleared");
   }
 
+  // Export filtered (if any filter/search is active) else export all via helper
+  function onExport() {
+    const filtering = Boolean(roleFilter || search.trim());
+    if (!filtering) {
+      exportBookmarksCSV();
+      return;
+    }
+    // custom export for the filtered subset
+    const rows = [
+      ["id", "role", "text", "topic", "difficulty", "created"],
+      ...filtered.map((b) => [
+        b.id,
+        b.role,
+        b.text,
+        b.topic ?? "",
+        b.difficulty ?? "",
+        b.created ?? "",
+      ]),
+    ];
+    const csv = rows
+      .map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `bookmarks_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">Bookmarks</h1>
-        <p className="text-white/70">Your saved questions.</p>
+        <p className="text-muted-foreground">Your saved questions.</p>
       </div>
 
       {/* Toolbar */}
-      <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+      <Card>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-white/60">Roles:</span>
+          <span className="text-xs text-muted-foreground">Roles:</span>
           {roles.map((r) => (
-            <button
+            <Chip
               key={r}
-              onClick={() => setRoleFilter(roleFilter === r ? "" : r)}
-              className={[
-                "rounded-xl px-3 py-1.5 text-xs transition-colors border",
-                roleFilter === r
-                  ? "bg-brand-600/20 text-white border-brand-400/30"
-                  : "bg-white/5 text-white/80 border-white/10 hover:bg-white/10",
-              ].join(" ")}
-            >
-              {r}
-            </button>
+              label={r}
+              active={roleFilter ? roleFilter === r : true}
+              onClick={() => {
+                if (!roleFilter) setRoleFilter(r);
+                else setRoleFilter(roleFilter === r ? "" : r);
+              }}
+            />
           ))}
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => setRoleFilter("")}
-            className="ml-1 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10"
+            className="ml-1"
+            aria-label="Show all roles"
+            title="Show all roles"
           >
             All
-          </button>
+          </Button>
 
-          <div className="mx-2 h-4 w-px bg-white/10" />
+          <div className="mx-2 h-4 w-px bg-border" />
 
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search text/topic/difficulty…"
-            className="rounded-lg border border-white/10 bg-black/20 px-3 py-1.5 text-sm text-white outline-none focus:border-brand-400/50"
-          />
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search text / topic / difficulty…"
+              className="w-64 rounded-xl border border-input bg-transparent pl-8 pr-8 py-2 text-sm text-foreground placeholder:text-muted-foreground/70 focus-ring"
+            />
+            {search && (
+              <button
+                aria-label="Clear search"
+                onClick={() => setSearch("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground hover:text-foreground focus-ring"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
 
-          <div className="mx-2 h-4 w-px bg-white/10" />
+          <div className="mx-2 h-4 w-px bg-border" />
 
-          <button
-            onClick={() => exportBookmarksCSV()}
-            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/80 hover:bg-white/10"
-            title="Export CSV"
-          >
-            <Download className="h-4 w-4" /> Export
-          </button>
+          <Button variant="outline" size="sm" onClick={onExport} title="Export CSV">
+            <Download className="h-4 w-4" />
+            <span className="ml-2 hidden sm:inline">Export</span>
+          </Button>
 
-          <button
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => fileRef.current?.click()}
-            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/80 hover:bg-white/10"
             title="Import CSV"
           >
-            <Upload className="h-4 w-4" /> Import
-          </button>
+            <Upload className="h-4 w-4" />
+            <span className="ml-2 hidden sm:inline">Import</span>
+          </Button>
 
-          <button
-            onClick={doClear}
-            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/80 hover:bg-white/10"
-            title="Clear all"
-          >
-            <X className="h-4 w-4" /> Clear
-          </button>
+          <Button variant="destructive" size="sm" onClick={doClear} title="Clear all">
+            <X className="h-4 w-4" />
+            <span className="ml-2 hidden sm:inline">Clear</span>
+          </Button>
 
           <input
             type="file"
@@ -167,54 +240,69 @@ export default function BookmarksPage() {
             onChange={(e) => e.target.files && onImport(e.target.files[0])}
           />
         </div>
-      </div>
+      </Card>
 
       {filtered.length === 0 ? (
         <Card>
-          <p className="text-sm text-white/70">
-            No bookmarks yet. Go to the Interview page and star a question.
+          <p className="text-sm text-muted-foreground">
+            No bookmarks{roleFilter ? ` for “${roleFilter}”` : ""}. Go to the Interview page and
+            star a question.
           </p>
         </Card>
       ) : (
-        <div className="overflow-hidden rounded-2xl divide-y divide-white/10 border border-white/10">
-          {filtered.map((b) => (
-            <div
-              key={b.id}
-              className="flex items-start justify-between bg-white/[0.03] px-4 py-3 hover:bg-white/[0.06]"
-            >
-              <div className="min-w-0">
-                <p className="font-medium">{b.text}</p>
-                <div className="mt-1 flex flex-wrap items-center gap-2">
-                  <RoleChip label={b.role} />
-                  {b.difficulty && <RoleChip label={b.difficulty} />}
-                  {b.topic && <RoleChip label={b.topic} />}
+        <div className="overflow-hidden rounded-2xl border border-border">
+          <div className="bg-secondary/60 px-4 py-2 text-xs text-muted-foreground">
+            Showing {filtered.length} of {list.length}
+          </div>
+
+          <ul className="divide-y divide-border">
+            {filtered.map((b) => (
+              <li
+                key={b.id}
+                className="flex items-start justify-between bg-background/40 px-4 py-3 hover:bg-secondary/60"
+              >
+                <div className="min-w-0">
+                  <p className="font-medium text-foreground">{b.text}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <RolePill label={b.role} />
+                    {b.difficulty && <RolePill label={b.difficulty} />}
+                    {b.topic && <RolePill label={b.topic} />}
+                  </div>
                 </div>
-              </div>
-              <div className="ml-4 flex items-center gap-2 shrink-0">
-                <button
-                  onClick={() => practice(b)}
-                  className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-white/80 hover:bg-white/10"
-                  title="Practice this question"
-                >
-                  <Play className="h-4 w-4" /> Practice
-                </button>
-                <button
-                  onClick={() => copy(b)}
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-white/80 hover:bg-white/10"
-                  title="Copy text"
-                >
-                  <Copy className="h-4 w-4" />
-                </button>
-                <button
-                  onClick={() => remove(b)}
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-white/80 hover:bg-white/10"
-                  title="Remove"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-          ))}
+
+                <div className="ml-4 flex items-center gap-2 shrink-0">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => practice(b)}
+                    title="Practice this question"
+                    className="gap-2"
+                  >
+                    <Play className="h-4 w-4" />
+                    Practice
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onCopy(b)}
+                    title="Copy text"
+                    aria-label="Copy bookmark text"
+                  >
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => onRemove(b)}
+                    title="Remove bookmark"
+                    aria-label="Remove bookmark"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </div>

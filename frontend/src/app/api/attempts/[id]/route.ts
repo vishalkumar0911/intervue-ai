@@ -15,20 +15,31 @@ async function callUpstream(
   if (auth) headers["x-api-key"] = API_KEY;
   if (body !== undefined) headers["Content-Type"] = "application/json";
 
-  const r = await fetch(`${BASE}/attempts/${id}`, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-    cache: "no-store",
-  });
+  // URL-encode the id
+  const url = `${BASE}/attempts/${encodeURIComponent(id)}`;
 
-  const ct = r.headers.get("content-type") || "";
-  if (ct.includes("application/json")) {
-    const j = await r.json().catch(() => ({}));
-    return NextResponse.json(j, { status: r.status });
+  try {
+    const r = await fetch(url, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      cache: "no-store",
+    });
+
+    const ct = r.headers.get("content-type") || "";
+    if (ct.includes("application/json")) {
+      const j = await r.json().catch(() => ({}));
+      return NextResponse.json(j, { status: r.status });
+    }
+    const text = await r.text().catch(() => "");
+    return new NextResponse(text, { status: r.status });
+  } catch (err: any) {
+    // Graceful 502 on network errors / upstream down
+    return NextResponse.json(
+      { detail: "Upstream unavailable", error: String(err?.message || err) },
+      { status: 502 },
+    );
   }
-  const text = await r.text().catch(() => "");
-  return new NextResponse(text, { status: r.status });
 }
 
 // NOTE: params is a Promise in Next 15

@@ -8,10 +8,19 @@ import FirstVisitRedirect from "@/components/FirstVisitRedirect";
 
 export default function Providers({ children }: { children: React.ReactNode }) {
   return (
-    <AuthProvider>
-      <SidebarProvider>
-        <ThemeProvider><FirstVisitRedirect />{children}</ThemeProvider>
-      </SidebarProvider>
-    </AuthProvider>
+    <ThemeProvider
+      attribute="class"            // toggles .dark on <html>
+      defaultTheme="system"        // matches OS on first paint
+      enableSystem
+      disableTransitionOnChange    // avoids flash when switching
+      storageKey="intervue-theme"  // persistent + scoped key
+    >
+      <AuthProvider>
+        <SidebarProvider>
+          <FirstVisitRedirect />
+          {children}
+        </SidebarProvider>
+      </AuthProvider>
+    </ThemeProvider>
   );
 }

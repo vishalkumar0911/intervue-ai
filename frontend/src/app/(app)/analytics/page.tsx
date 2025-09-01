@@ -30,7 +30,8 @@ function fmtDateShort(iso: string) {
 }
 
 function movingAverage(values: number[], window: number): Array<number | null> {
-  if (!window) return [];
+  // keep index alignment even when MA is "off"
+  if (!window) return new Array(values.length).fill(null);
   const out: Array<number | null> = new Array(values.length).fill(null);
   let sum = 0;
   for (let i = 0; i < values.length; i++) {
@@ -43,19 +44,20 @@ function movingAverage(values: number[], window: number): Array<number | null> {
 
 function SkeletonCard() {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
-      <div className="h-4 w-40 rounded bg-white/10" />
-      <div className="mt-3 h-56 w-full rounded bg-white/10" />
+    <div className="card p-6 animate-pulse">
+      <div className="h-4 w-40 rounded bg-muted" />
+      <div className="mt-3 h-56 w-full rounded bg-muted" />
     </div>
   );
 }
 
+// Theme-aware tooltip style via CSS variables
 const tipStyle: React.CSSProperties = {
-  background: "rgba(17,24,39,.75)",
-  border: "1px solid rgba(255,255,255,0.15)",
-  backdropFilter: "blur(6px)",
-  color: "white",
+  background: "hsl(var(--popover))",
+  border: "1px solid hsl(var(--border))",
+  color: "hsl(var(--popover-foreground))",
   borderRadius: 12,
+  backdropFilter: "blur(6px)",
 };
 
 /* ------------------------------- tiny UI bits ------------------------------ */
@@ -75,13 +77,14 @@ function Chip({
     <button
       onClick={onClick}
       disabled={disabled}
+      aria-pressed={active}
       className={[
-        "rounded-xl px-3 py-1.5 text-xs transition-colors border",
+        "rounded-xl px-3 py-1.5 text-xs transition-colors focus-ring",
         disabled
-          ? "opacity-50 cursor-not-allowed border-white/10"
+          ? "opacity-50 cursor-not-allowed border border-border bg-secondary"
           : active
-          ? "bg-brand-600/20 text-white border-brand-400/30"
-          : "bg-white/5 text-white/80 border-white/10 hover:bg-white/10",
+          ? "bg-brand-500/15 ring-1 ring-brand-500/30 text-foreground"
+          : "border border-border bg-secondary text-foreground/80 hover:bg-secondary/80",
       ].join(" ")}
     >
       {label}
@@ -152,13 +155,13 @@ function DateInput({
   onChange: (v: string) => void;
 }) {
   return (
-    <label className="text-xs text-white/70 inline-flex items-center gap-2">
+    <label className="text-xs text-muted-foreground inline-flex items-center gap-2">
       <span className="hidden sm:inline">{label}</span>
       <input
         type="date"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-white outline-none focus:border-brand-400/50"
+        className="rounded-lg border border-border bg-background px-2 py-1 text-sm text-foreground outline-none focus-ring"
       />
     </label>
   );
@@ -339,21 +342,21 @@ export default function AnalyticsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Analytics</h1>
-          <p className="text-white/70">Visual insights about your performance.</p>
+          <h1 className="text-2xl font-semibold text-foreground">Analytics</h1>
+          <p className="text-muted-foreground">Visual insights about your performance.</p>
         </div>
         {!loading && (
           <div className="flex items-center gap-2">
             <button
               onClick={() => refetch().catch(() => {})}
-              className="rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/80 hover:bg-white/10"
+              className="rounded-xl border border-border bg-secondary px-3 py-1.5 text-xs text-foreground/80 hover:bg-secondary/80 focus-ring"
               title="Refresh data"
             >
               Refresh
             </button>
             <button
               onClick={exportCsv}
-              className="rounded-xl bg-brand-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-500"
+              className="rounded-xl bg-brand-600 px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-95 focus-ring"
               title="Export filtered attempts"
             >
               Export CSV
@@ -363,9 +366,9 @@ export default function AnalyticsPage() {
       </div>
 
       {/* Filters */}
-      <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+      <div className="rounded-2xl border border-border bg-card p-4">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-white/60">Roles:</span>
+          <span className="text-xs text-muted-foreground">Roles:</span>
           {allRoles.map((r) => (
             <Chip
               key={r}
@@ -379,34 +382,34 @@ export default function AnalyticsPage() {
           ))}
           <button
             onClick={selectAllRoles}
-            className="ml-1 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10"
+            className="ml-1 rounded-xl border border-border bg-secondary px-3 py-1.5 text-xs text-foreground/80 hover:bg-secondary/80 focus-ring"
             title="Show all roles"
           >
             All
           </button>
 
-          <div className="mx-3 h-4 w-px bg-white/10" />
+          <div className="mx-3 h-4 w-px bg-border" />
 
           <DateInput label="From" value={from} onChange={setFrom} />
           <DateInput label="To" value={to} onChange={setTo} />
 
-          <div className="mx-1 h-4 w-px bg-white/10" />
+          <div className="mx-1 h-4 w-px bg-border" />
 
           <button
             onClick={() => setLastDays(7)}
-            className="rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10"
+            className="rounded-xl border border-border bg-secondary px-3 py-1.5 text-xs text-foreground/80 hover:bg-secondary/80 focus-ring"
           >
             Last 7d
           </button>
           <button
             onClick={() => setLastDays(30)}
-            className="rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10"
+            className="rounded-xl border border-border bg-secondary px-3 py-1.5 text-xs text-foreground/80 hover:bg-secondary/80 focus-ring"
           >
             Last 30d
           </button>
           <button
             onClick={clearRange}
-            className="rounded-2xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10"
+            className="rounded-2xl border border-border bg-secondary px-3 py-1.5 text-xs text-foreground/80 hover:bg-secondary/80 focus-ring"
           >
             All time
           </button>
@@ -414,7 +417,7 @@ export default function AnalyticsPage() {
       </div>
 
       {err && (
-        <div className="rounded-2xl border border-rose-400/30 bg-rose-500/10 p-4 text-rose-200">
+        <div className="rounded-2xl border border-destructive/40 bg-destructive/10 p-4 text-destructive-foreground" role="alert">
           {err}
         </div>
       )}
@@ -424,18 +427,18 @@ export default function AnalyticsPage() {
           <SkeletonCard />
           <SkeletonCard />
         </div>
-      ) : filtered.length === 0 ? (
+      ) : empty ? (
         <Card>
-          <p className="text-sm text-white/70">
+          <p className="text-sm text-muted-foreground">
             No attempts for the selected filters. Adjust Role/Date above or seed more data.
           </p>
         </Card>
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
           {/* Scores over time + moving average */}
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
+          <div className="rounded-2xl border border-border bg-card p-6 text-foreground">
             <div className="mb-3 flex items-center justify-between">
-              <p className="text-sm text-white/60">Scores over time</p>
+              <p className="text-sm text-muted-foreground">Scores over time</p>
               <div className="flex gap-2">
                 <Chip label="MA off" active={maWindow === 0} onClick={() => setMaWindow(0)} />
                 <Chip label="MA 7" active={maWindow === 7} onClick={() => setMaWindow(7)} />
@@ -467,7 +470,7 @@ export default function AnalyticsPage() {
                   />
                   <Tooltip
                     contentStyle={tipStyle}
-                    labelStyle={{ color: "white" }}
+                    labelStyle={{ color: "hsl(var(--popover-foreground))" }}
                     formatter={(val: any, name: string) => {
                       const safe = typeof val === "number" && Number.isFinite(val) ? val : "";
                       return [String(safe), name === "ma" ? "MA" : "Score"];
@@ -475,12 +478,12 @@ export default function AnalyticsPage() {
                   />
                   <ReferenceLine
                     y={avgScore}
-                    stroke="rgba(255,255,255,0.3)"
+                    stroke="hsl(var(--muted-foreground) / 0.45)"
                     strokeDasharray="4 6"
                     ifOverflow="extendDomain"
                     label={{
                       value: `Avg ${avgScore}`,
-                      fill: "rgba(255,255,255,.75)",
+                      fill: "hsl(var(--muted-foreground))",
                       position: "right",
                       fontSize: 12,
                     }}
@@ -490,7 +493,7 @@ export default function AnalyticsPage() {
                     <Line
                       type="monotone"
                       dataKey="ma"
-                      stroke="rgba(255,255,255,.7)"
+                      stroke="hsl(var(--foreground) / 0.7)"
                       strokeWidth={2}
                       dot={false}
                       strokeDasharray="6 6"
@@ -503,9 +506,9 @@ export default function AnalyticsPage() {
           </div>
 
           {/* Right card: Avg score ↔ Sessions (optionally stacked) */}
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
+          <div className="rounded-2xl border border-border bg-card p-6 text-foreground">
             <div className="mb-3 flex items-center justify-between">
-              <p className="text-sm text-white/60">
+              <p className="text-sm text-muted-foreground">
                 {metric === "avg"
                   ? "Average score by role"
                   : stackByDiff
@@ -531,7 +534,7 @@ export default function AnalyticsPage() {
 
             {/* Legend for stacked mode */}
             {metric === "sessions" && stackByDiff && (
-              <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-white/70">
+              <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                 <span className="inline-flex items-center gap-1">
                   <span className="inline-block h-2 w-2 rounded" style={{ backgroundColor: "#34d399" }} />
                   Easy
@@ -589,19 +592,15 @@ export default function AnalyticsPage() {
 
                   <Tooltip
                     contentStyle={tipStyle}
-                    labelStyle={{ color: "white" }}
+                    labelStyle={{ color: "hsl(var(--popover-foreground))" }}
                     formatter={(val: any, key: string) => {
                       const v = typeof val === "number" && Number.isFinite(val) ? val : 0;
                       if (metric === "avg") return [String(v), "Avg score"];
                       if (stackByDiff) {
                         const label =
-                          key === "easy"
-                            ? "Easy"
-                            : key === "medium"
-                            ? "Medium"
-                            : key === "hard"
-                            ? "Hard"
-                            : "Unknown";
+                          key === "easy" ? "Easy" :
+                          key === "medium" ? "Medium" :
+                          key === "hard" ? "Hard" : "Unknown";
                         return [String(v), label];
                       }
                       return [String(v), "Sessions"];
@@ -614,7 +613,7 @@ export default function AnalyticsPage() {
                         <LabelList
                           dataKey="avg"
                           position="top"
-                          style={{ fill: "rgba(255,255,255,.9)", fontSize: 12 }}
+                          style={{ fill: "hsl(var(--foreground))", opacity: 0.9, fontSize: 12 }}
                         />
                       )}
                     </Bar>
@@ -622,23 +621,23 @@ export default function AnalyticsPage() {
                     <>
                       <Bar dataKey="easy" stackId="d" radius={[10, 10, 0, 0]} fill="#34d399">
                         {showValues && (
-                          <LabelList dataKey="easy" position="top" style={{ fill: "rgba(255,255,255,.9)", fontSize: 11 }} />
+                          <LabelList dataKey="easy" position="top" style={{ fill: "hsl(var(--foreground))", opacity: 0.9, fontSize: 11 }} />
                         )}
                       </Bar>
                       <Bar dataKey="medium" stackId="d" fill="#f59e0b">
                         {showValues && (
-                          <LabelList dataKey="medium" position="top" style={{ fill: "rgba(255,255,255,.9)", fontSize: 11 }} />
+                          <LabelList dataKey="medium" position="top" style={{ fill: "hsl(var(--foreground))", opacity: 0.9, fontSize: 11 }} />
                         )}
                       </Bar>
                       <Bar dataKey="hard" stackId="d" fill="#ef4444">
                         {showValues && (
-                          <LabelList dataKey="hard" position="top" style={{ fill: "rgba(255,255,255,.9)", fontSize: 11 }} />
+                          <LabelList dataKey="hard" position="top" style={{ fill: "hsl(var(--foreground))", opacity: 0.9, fontSize: 11 }} />
                         )}
                       </Bar>
                       {showUnknown && (
                         <Bar dataKey="unknown" stackId="d" fill="#9ca3af">
                           {showValues && (
-                            <LabelList dataKey="unknown" position="top" style={{ fill: "rgba(255,255,255,.9)", fontSize: 11 }} />
+                            <LabelList dataKey="unknown" position="top" style={{ fill: "hsl(var(--foreground))", opacity: 0.9, fontSize: 11 }} />
                           )}
                         </Bar>
                       )}
@@ -646,7 +645,11 @@ export default function AnalyticsPage() {
                   ) : (
                     <Bar dataKey="count" radius={[10, 10, 0, 0]} fill="url(#gradBars)">
                       {showValues && (
-                        <LabelList dataKey="count" position="top" style={{ fill: "rgba(255,255,255,.9)", fontSize: 12 }} />
+                        <LabelList
+                          dataKey="count"
+                          position="top"
+                          style={{ fill: "hsl(var(--foreground))", opacity: 0.9, fontSize: 12 }}
+                        />
                       )}
                     </Bar>
                   )}

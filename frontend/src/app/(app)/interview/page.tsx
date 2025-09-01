@@ -1,4 +1,3 @@
-// src/app/(app)/interview/page.tsx
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -11,6 +10,7 @@ import {
   Volume2, VolumeX, Timer, StickyNote,
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { Textarea } from "@/components/ui/Textarea";
 
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
@@ -288,10 +288,10 @@ export default function InterviewPage() {
 
   function scorePill(n: number) {
     return n >= 80
-      ? "bg-emerald-500/15 text-emerald-300 ring-emerald-400/20"
+      ? "bg-emerald-500/15 text-emerald-700 ring-emerald-400/30 dark:text-emerald-200"
       : n >= 50
-      ? "bg-amber-500/15 text-amber-300 ring-amber-400/20"
-      : "bg-rose-500/15 text-rose-300 ring-rose-400/20";
+      ? "bg-amber-500/15 text-amber-700 ring-amber-400/30 dark:text-amber-200"
+      : "bg-rose-500/15 text-rose-700 ring-rose-400/30 dark:text-rose-200";
   }
 
   async function saveAttempt() {
@@ -303,7 +303,7 @@ export default function InterviewPage() {
       duration_min: minutes,
       difficulty: (difficulty || undefined) as any,
       // omit date -> server sets UTC now()
-};
+    };
 
     try {
       await api.createAttempt(payload);
@@ -331,10 +331,10 @@ export default function InterviewPage() {
       <section className="mx-auto max-w-5xl px-4 py-10 md:py-14">
         <div className="mb-6 flex items-center gap-2">
           <Sparkles className="h-5 w-5 text-accent-400" />
-          <h1 className="text-2xl font-semibold">Mock Interview</h1>
+          <h1 className="text-2xl font-semibold text-foreground">Mock Interview</h1>
         </div>
 
-        <p className="text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           Pick a role, tweak difficulty, and practice. Your questions load from your local API.
         </p>
 
@@ -364,10 +364,10 @@ export default function InterviewPage() {
               if (!on) cancelSpeech();
             }}
             className={[
-              "inline-flex items-center gap-2 rounded-lg border px-3 py-1.5",
+              "inline-flex items-center gap-2 rounded-lg px-3 py-1.5 focus-ring",
               prefs.tts
-                ? "border-brand-400/30 bg-brand-600/20 text-white"
-                : "border-white/10 bg-white/5 text-white/80 hover:bg-white/10",
+                ? "bg-brand-500/15 text-foreground ring-1 ring-brand-500/30"
+                : "bg-secondary text-foreground/80 hover:bg-secondary/80 border border-border"
             ].join(" ")}
             title="Toggle speech"
           >
@@ -377,7 +377,7 @@ export default function InterviewPage() {
 
           <button
             onClick={copyQuestion}
-            className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-white/80 hover:bg-white/10"
+            className="inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-1.5 text-foreground/80 hover:bg-secondary/80 focus-ring"
             title="Copy question"
           >
             <Copy className="h-4 w-4" />Copy Ques.
@@ -385,33 +385,33 @@ export default function InterviewPage() {
 
           <button
             onClick={() => setNotesOpen((v) => !v)}
-            className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-white/80 hover:bg-white/10"
+            className="inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-1.5 text-foreground/80 hover:bg-secondary/80 focus-ring"
             title="Notes"
           >
             <StickyNote className="h-4 w-4" /> Notes
           </button>
 
-          <div className="mx-2 h-4 w-px bg-white/10" />
+          <div className="mx-2 h-4 w-px bg-border" />
 
           <div className="inline-flex items-center gap-1">
             <Timer className="h-4 w-4 opacity-80" />
-            <span className="text-white/70">Auto-next:</span>
+            <span className="text-muted-foreground">Auto-next:</span>
             {([0, 15, 30, 60] as const).map((sec) => (
               <button
                 key={sec}
                 onClick={() => setCountdown(sec)}
                 className={[
-                  "rounded-lg border px-2 py-1 text-xs",
+                  "rounded-lg border px-2 py-1 text-xs focus-ring",
                   prefs.qSecs === sec
-                    ? "border-brand-400/30 bg-brand-600/20 text-white"
-                    : "border-white/10 bg-white/5 text-white/80 hover:bg-white/10",
+                    ? "border-brand-500/30 bg-brand-500/15 text-foreground"
+                    : "border-border bg-secondary text-foreground/80 hover:bg-secondary/80",
                 ].join(" ")}
               >
                 {sec === 0 ? "off" : `${sec}s`}
               </button>
             ))}
             {prefs.qSecs ? (
-              <span className="ml-2 rounded-md bg-black/20 px-2 py-0.5 text-xs text-white/80">
+              <span className="ml-2 rounded-md bg-muted px-2 py-0.5 text-xs text-foreground/80">
                 {fmtMMSS(remaining)}
               </span>
             ) : null}
@@ -420,9 +420,11 @@ export default function InterviewPage() {
 
         {/* errors */}
         {error && (
-          <div className="mt-4 flex items-center gap-3 rounded-2xl border p-4 text-sm
-                          border-rose-200/60 bg-rose-50 text-rose-700
-                          dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200" role="alert">
+          <div
+            className="mt-4 flex items-center gap-3 rounded-2xl border p-4 text-sm
+                       border-destructive/40 bg-destructive/10 text-destructive-foreground"
+            role="alert"
+          >
             <Info className="h-4 w-4" />
             <span>{error}</span>
           </div>
@@ -431,14 +433,14 @@ export default function InterviewPage() {
         {!role && (
           <Card>
             <div className="flex items-start gap-3">
-              <Keyboard className="h-5 w-5 text-brand-300 shrink-0 mt-0.5" />
+              <Keyboard className="h-5 w-5 text-brand-500 shrink-0 mt-0.5" />
               <div>
-                <p className="font-medium">Choose a role to begin</p>
+                <p className="font-medium text-foreground">Choose a role to begin</p>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Tip: use <kbd className="rounded bg-black/10 px-1 dark:bg-white/10">P</kbd> /
-                  <kbd className="rounded bg-black/10 px-1 dark:bg-white/10">N</kbd> or
-                  <kbd className="rounded bg-black/10 px-1 dark:bg-white/10">←</kbd>
-                  <kbd className="rounded bg-black/10 px-1 dark:bg-white/10">→</kbd> to switch.
+                  Tip: use <kbd className="rounded bg-muted px-1">P</kbd> /
+                  <kbd className="rounded bg-muted px-1">N</kbd> or
+                  <kbd className="rounded bg-muted px-1">←</kbd>
+                  <kbd className="rounded bg-muted px-1">→</kbd> to switch.
                 </p>
               </div>
             </div>
@@ -450,10 +452,13 @@ export default function InterviewPage() {
         )}
 
         {role && (
-          <div className="mt-6 rounded-2xl border border-black/10 bg-white p-6 shadow-soft dark:border-white/10 dark:bg-white/5">
+          <div className="card p-6 mt-6">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0 flex-1">
-                <p aria-live="polite" className="text-xs uppercase tracking-wide text-brand-600/80 dark:text-brand-300/80">
+                <p
+                  aria-live="polite"
+                  className="text-xs uppercase tracking-wide text-brand-700/80 dark:text-brand-300/80"
+                >
                   Question {bank.length ? index + 1 : 0}{bank.length ? ` of ${bank.length}` : ""}
                 </p>
 
@@ -466,7 +471,8 @@ export default function InterviewPage() {
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -6 }}
                         transition={{ duration: 0.18 }}
-                        className="text-2xl md:text-3xl font-semibold tracking-tight leading-tight text-white drop-shadow-[0_1px_0_rgba(0,0,0,0.32)] dark:text-white">
+                        className="text-2xl md:text-3xl font-semibold tracking-tight leading-tight text-foreground"
+                      >
                         {loading ? (
                           <span className="inline-flex items-center gap-2 text-muted-foreground">
                             <Loader2 className="h-4 w-4 animate-spin" /> Loading…
@@ -482,21 +488,24 @@ export default function InterviewPage() {
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   {current?.topic && <Badge variant="neutral">Topic: {current.topic}</Badge>}
                   {current?.difficulty && (
-                    <span className={[
-                      "inline-flex items-center rounded-xl px-2.5 py-1 text-xs ring-1",
-                      current.difficulty === "easy" && "bg-emerald-500/15 text-emerald-700 ring-emerald-400/30 dark:text-emerald-200",
-                      current.difficulty === "medium" && "bg-amber-500/15  text-amber-700  ring-amber-400/30  dark:text-amber-200",
-                      current.difficulty === "hard" && "bg-rose-500/15   text-rose-700   ring-rose-400/30    dark:text-rose-200",
-                    ].join(" ")}>
+                    <span
+                      className={[
+                        "inline-flex items-center rounded-xl px-2.5 py-1 text-xs ring-1 ring-border",
+                        current.difficulty === "easy" && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-200",
+                        current.difficulty === "medium" && "bg-amber-500/10 text-amber-700 dark:text-amber-200",
+                        current.difficulty === "hard" && "bg-rose-500/10 text-rose-700 dark:text-rose-200",
+                      ].join(" ")}
+                    >
                       Difficulty: {current.difficulty}
                     </span>
                   )}
 
                   <button
                     onClick={toggleBookmark}
-                    className="ml-2 inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-white/80 hover:bg-white/10"
-                    title={bookmarked ? "Remove bookmark" : "Bookmark this question"}>
-                    {bookmarked ? <Star className="h-4 w-4 text-yellow-300" /> : <StarOff className="h-4 w-4" />}
+                    className="ml-2 inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-2 py-1 text-foreground/80 hover:bg-secondary/80 focus-ring"
+                    title={bookmarked ? "Remove bookmark" : "Bookmark this question"}
+                  >
+                    {bookmarked ? <Star className="h-4 w-4 text-yellow-500" /> : <StarOff className="h-4 w-4" />}
                     <span className="text-xs">{bookmarked ? "Bookmarked" : "Bookmark"}</span>
                   </button>
                 </div>
@@ -520,14 +529,15 @@ export default function InterviewPage() {
                   }}
                   disabled={loading || !bank.length}
                   title="Shortcut: N or →"
-                  className="inline-flex items-center gap-2">
+                  className="inline-flex items-center gap-2"
+                >
                   {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronRight className="h-4 w-4" />} Next
                 </Button>
               </div>
             </div>
 
             {/* progress */}
-            <div className="mt-6 h-2 w-full overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
+            <div className="mt-6 h-2 w-full overflow-hidden rounded-full bg-muted">
               <div
                 role="progressbar" aria-valuemin={0} aria-valuemax={bank.length || 0}
                 aria-valuenow={Math.min(index + 1, bank.length)}
@@ -540,7 +550,7 @@ export default function InterviewPage() {
               <p className="text-xs text-muted-foreground">
                 Session time: {fmtMMSS(elapsed)}
                 {prefs.qSecs ? (
-                  <span className="ml-3 inline-flex items-center gap-1 text-white/70">
+                  <span className="ml-3 inline-flex items-center gap-1 text-foreground/70">
                     <Timer className="h-3 w-3" /> <span>Next in: {fmtMMSS(remaining)}</span>
                   </span>
                 ) : null}
@@ -549,13 +559,13 @@ export default function InterviewPage() {
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setNotesOpen((v) => !v)}
-                  className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-white/80 hover:bg-white/10"
+                  className="inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-1.5 text-foreground/80 hover:bg-secondary/80 focus-ring"
                   title="Open notes">
                   <StickyNote className="h-4 w-4" /> Notes
                 </button>
                 <button
                   onClick={() => exportNotesCSV()}
-                  className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-white/80 hover:bg-white/10"
+                  className="inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-1.5 text-foreground/80 hover:bg-secondary/80 focus-ring"
                   title="Export notes">
                   Export notes
                 </button>
@@ -574,28 +584,36 @@ export default function InterviewPage() {
 
             {/* notes panel */}
             {notesOpen && current?.id && (
-              <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-4">
-                <p className="mb-2 text-sm text-white/70">Notes for this question</p>
-                <textarea
+              <div className="surface p-4 mt-4">
+                <p className="mb-2 text-sm text-muted-foreground">Notes for this question</p>
+                <Textarea
                   value={note}
                   onChange={(e) => setNoteState(e.target.value)}
                   placeholder="Write your thoughts, structure, hints…"
-                  className="min-h-[120px] w-full rounded-lg border border-white/10 bg-black/10 p-3 text-sm outline-none focus:border-brand-400/60"
+                  className="min-h-[120px]"
                 />
+
               </div>
             )}
 
             {/* complete/save panel */}
             {completeOpen && (
-              <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-4">
+              <div className="surface p-4 mt-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
-                    <p className="text-sm font-medium">Set your score</p>
-                    <p className="text-xs text-white/60">Move the slider and click Save</p>
+                    <p className="text-sm font-medium text-foreground">Set your score</p>
+                    <p className="text-xs text-muted-foreground">Move the slider and click Save</p>
                   </div>
                   <div className="flex items-center gap-3">
                     <span className={`inline-flex items-center rounded-lg px-2 py-1 text-xs ring-1 ${scorePill(score)}`}>{score}</span>
-                    <input type="range" min={0} max={100} value={score} onChange={(e) => setScore(parseInt(e.target.value))} className="w-48 accent-brand-500" />
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={score}
+                      onChange={(e) => setScore(parseInt(e.target.value))}
+                      className="w-48 accent-brand-500"
+                    />
                     <Button onClick={saveAttempt} className="ml-1">Save</Button>
                   </div>
                 </div>

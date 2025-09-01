@@ -13,11 +13,11 @@ import { updateProfile } from "@/lib/auth";
 export default function SignupPage() {
   const router = useRouter();
   const { signup } = useAuth();
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [pass, setPass] = useState("");
+  const [name, setName]       = useState("");
+  const [email, setEmail]     = useState("");
+  const [role, setRole]       = useState("");
+  const [pass, setPass]       = useState("");
   const [confirm, setConfirm] = useState("");
-  const [role, setRole] = useState("");       // NEW
   const [loading, setLoading] = useState(false);
 
   async function onSubmit(e: React.FormEvent) {
@@ -28,8 +28,8 @@ export default function SignupPage() {
     }
     setLoading(true);
     try {
-      await signup(name, email, pass, role);
-      if (role.trim()) updateProfile({ role: role.trim() });   // persist role
+      await signup(name.trim(), email.trim(), pass, role.trim());
+      if (role.trim()) updateProfile({ role: role.trim() });
       toast.success("Account created!");
       router.push("/dashboard");
     } catch (e: any) {
@@ -43,34 +43,65 @@ export default function SignupPage() {
     <Card>
       <div className="space-y-1">
         <h1 className="text-2xl font-semibold">Create your account</h1>
-        <p className="text-sm text-white/70">
+        <p className="text-sm text-muted-foreground">
           Already have one?{" "}
-          <Link href="/login" className="text-brand-300 hover:text-brand-200 underline underline-offset-4">
+          <Link href="/login" className="text-primary underline underline-offset-4 hover:opacity-90">
             Sign in
           </Link>
         </p>
       </div>
 
-      <form onSubmit={onSubmit} className="mt-6 space-y-4">
-        <Input label="Name" placeholder="Jane Doe" autoComplete="name" required
-               value={name} onChange={(e) => setName(e.target.value)} />
-        <Input label="Email" type="email" placeholder="jane@example.com" autoComplete="email" required
-               value={email} onChange={(e) => setEmail(e.target.value)} />
-
-        {/* Optional role */}
-        <Input label="Preferred role (optional)" placeholder="e.g. Backend Developer"
-               value={role} onChange={(e) => setRole(e.target.value)} />
+      <form onSubmit={onSubmit} aria-busy={loading} className="mt-6 space-y-4">
+        <Input
+          label="Name"
+          placeholder="Jane Doe"
+          autoComplete="name"
+          required
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <Input
+          label="Email"
+          type="email"
+          placeholder="jane@example.com"
+          autoComplete="email"
+          required
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+        <Input
+          label="Preferred role (optional)"
+          placeholder="e.g. Backend Developer"
+          value={role}
+          onChange={(e) => setRole(e.target.value)}
+        />
 
         <div className="grid gap-4 md:grid-cols-2">
-          <Input label="Password" type="password" placeholder="••••••••" autoComplete="new-password" required
-                 value={pass} onChange={(e) => setPass(e.target.value)} />
-          <Input label="Confirm password" type="password" placeholder="••••••••" autoComplete="new-password" required
-                 value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+          <Input
+            label="Password"
+            type="password"
+            placeholder="••••••••"
+            autoComplete="new-password"
+            minLength={8}
+            required
+            value={pass}
+            onChange={(e) => setPass(e.target.value)}
+          />
+          <Input
+            label="Confirm password"
+            type="password"
+            placeholder="••••••••"
+            autoComplete="new-password"
+            minLength={8}
+            required
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+          />
         </div>
 
         <div className="pt-1">
-          <Button disabled={loading} className="w-full">
-            {loading ? "Creating..." : "Create account"}
+          <Button type="submit" isLoading={loading} className="w-full">
+            Create account
           </Button>
         </div>
       </form>
