@@ -1,4 +1,3 @@
-// src/app/(app)/dashboard/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -29,32 +28,32 @@ function fmtDate(iso: string) {
 }
 
 function scoreClass(n: number) {
-  if (n >= 80) return "text-emerald-300";
-  if (n >= 50) return "text-amber-300";
-  return "text-rose-300";
+  if (n >= 80) return "text-emerald-700 dark:text-emerald-300";
+  if (n >= 50) return "text-amber-700 dark:text-amber-300";
+  return "text-rose-700 dark:text-rose-300";
 }
 
 function KpiSkeleton() {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
-      <div className="h-3 w-24 rounded bg-white/10" />
-      <div className="mt-3 h-7 w-16 rounded bg-white/10" />
+    <div className="card p-5 animate-pulse">
+      <div className="h-3 w-24 rounded bg-muted" />
+      <div className="mt-3 h-7 w-16 rounded bg-muted" />
     </div>
   );
 }
 
 function ListSkeleton() {
   return (
-    <div className="overflow-hidden rounded-2xl divide-y divide-white/10 border border-white/10">
+    <div className="overflow-hidden rounded-2xl border border-border">
       {Array.from({ length: 3 }).map((_, i) => (
-        <div key={i} className="flex items-center justify-between bg-white/[0.03] px-4 py-3">
+        <div key={i} className="flex items-center justify-between bg-card px-4 py-3">
           <div className="min-w-0">
-            <div className="h-4 w-44 rounded bg-white/10" />
-            <div className="mt-2 h-3 w-32 rounded bg-white/10" />
+            <div className="h-4 w-44 rounded bg-muted" />
+            <div className="mt-2 h-3 w-32 rounded bg-muted" />
           </div>
           <div className="flex items-center gap-6">
-            <span className="h-4 w-12 rounded bg-white/10" />
-            <span className="h-6 w-10 rounded bg-white/10" />
+            <span className="h-4 w-12 rounded bg-muted" />
+            <span className="h-6 w-10 rounded bg-muted" />
           </div>
         </div>
       ))}
@@ -77,10 +76,10 @@ function Chip({
     <button
       onClick={onClick}
       className={[
-        "rounded-xl px-3 py-1.5 text-xs transition-colors border",
+        "rounded-xl px-3 py-1.5 text-xs transition-colors focus-ring",
         active
-          ? "bg-brand-600/20 text-white border-brand-400/30"
-          : "bg-white/5 text-white/80 border-white/10 hover:bg-white/10",
+          ? "bg-brand-500/15 ring-1 ring-brand-500/30 text-foreground"
+          : "border border-border bg-secondary text-foreground/80 hover:bg-secondary/80",
       ].join(" ")}
     >
       {label}
@@ -98,13 +97,13 @@ function DateInput({
   onChange: (v: string) => void;
 }) {
   return (
-    <label className="text-xs text-white/70 inline-flex items-center gap-2">
+    <label className="text-xs text-muted-foreground inline-flex items-center gap-2">
       <span className="hidden sm:inline">{label}</span>
       <input
         type="date"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-white outline-none focus:border-brand-400/50"
+        className="rounded-lg border border-border bg-background px-2 py-1 text-sm text-foreground outline-none focus-ring"
       />
     </label>
   );
@@ -221,7 +220,7 @@ export default function DashboardPage() {
       setSeedRole(allRoles[0]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allRoles.join("|")]); // join to avoid changing ref on same content
+  }, [allRoles.join("|")]);
 
   // persist to localStorage
   useEffect(() => {
@@ -254,7 +253,6 @@ export default function DashboardPage() {
   }
 
   function exportCSV() {
-    // If exactly one role is selected, export just that role
     const oneRole = selectedRoles.length === 1 ? selectedRoles[0] : undefined;
     api.exportCSV({ role: oneRole }).catch(async (e: any) => {
       toast.error(e?.message || "Export failed");
@@ -312,12 +310,12 @@ export default function DashboardPage() {
       {/* Header + Seed + Export */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-3xl md:text-4xl font-semibold tracking-tight">
-            <span className="bg-gradient-to-r from-white via-white to-white bg-clip-text text-transparent drop-shadow-[0_2px_8px_rgba(0,0,0,0.25)]">
-              Welcome back
-            </span>
+          <h1 className="text-3xl md:text-4xl font-semibold tracking-tight text-foreground">
+            Welcome back
           </h1>
-          <p className="mt-1 text-white/75">Here’s a quick overview of your progress.</p>
+          <p className="mt-1 text-muted-foreground">
+            Here’s a quick overview of your progress.
+          </p>
         </div>
 
         {/* Seed + export controls */}
@@ -326,11 +324,11 @@ export default function DashboardPage() {
           <select
             value={seedRole}
             onChange={(e) => setSeedRole(e.target.value)}
-            className="rounded-xl border border-white/10 bg-white/5 px-2 py-2 text-sm text-white/80 outline-none hover:bg-white/10"
+            className="rounded-xl border border-border bg-background px-2 py-2 text-sm text-foreground outline-none hover:bg-secondary focus-ring"
             title="Role to seed"
           >
             {allRoles.map((r) => (
-              <option key={r} value={r} className="bg-slate-900 text-white">
+              <option key={r} value={r} className="bg-background text-foreground">
                 {r}
               </option>
             ))}
@@ -340,26 +338,26 @@ export default function DashboardPage() {
           <select
             value={seedDifficulty}
             onChange={(e) => setSeedDifficulty(e.target.value as any)}
-            className="rounded-xl border border-white/10 bg-white/5 px-2 py-2 text-sm text-white/80 outline-none hover:bg-white/10"
+            className="rounded-xl border border-border bg-background px-2 py-2 text-sm text-foreground outline-none hover:bg-secondary focus-ring"
             title="Difficulty (optional)"
           >
-            <option value="" className="bg-slate-900 text-white">
+            <option value="" className="bg-background text-foreground">
               Any difficulty
             </option>
-            <option value="easy" className="bg-slate-900 text-white">
+            <option value="easy" className="bg-background text-foreground">
               easy
             </option>
-            <option value="medium" className="bg-slate-900 text-white">
+            <option value="medium" className="bg-background text-foreground">
               medium
             </option>
-            <option value="hard" className="bg-slate-900 text-white">
+            <option value="hard" className="bg-background text-foreground">
               hard
             </option>
           </select>
 
           <button
             onClick={seedOne}
-            className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-500"
+            className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-95 focus-ring"
             title="Create a sample attempt"
           >
             <Plus className="h-4 w-4" /> Seed sample
@@ -367,7 +365,7 @@ export default function DashboardPage() {
 
           <button
             onClick={exportCSV}
-            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/80 hover:bg-white/10"
+            className="inline-flex items-center gap-2 rounded-xl border border-border bg-secondary px-3 py-2 text-sm text-foreground/80 hover:bg-secondary/80 focus-ring"
             title="Export attempts as CSV"
           >
             <Download className="h-4 w-4" />
@@ -377,9 +375,9 @@ export default function DashboardPage() {
       </div>
 
       {/* Filters */}
-      <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+      <div className="rounded-2xl border border-border bg-card p-4">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-white/60">Roles:</span>
+          <span className="text-xs text-muted-foreground">Roles:</span>
           {allRoles.map((r) => (
             <Chip
               key={r}
@@ -393,34 +391,34 @@ export default function DashboardPage() {
           ))}
           <button
             onClick={selectAllRoles}
-            className="ml-1 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10"
+            className="ml-1 rounded-xl border border-border bg-secondary px-3 py-1.5 text-xs text-foreground/80 hover:bg-secondary/80 focus-ring"
             title="Show all roles"
           >
             All
           </button>
 
-          <div className="mx-3 h-4 w-px bg-white/10" />
+          <div className="mx-3 h-4 w-px bg-border" />
 
           <DateInput label="From" value={from} onChange={setFrom} />
           <DateInput label="To" value={to} onChange={setTo} />
 
-          <div className="mx-1 h-4 w-px bg-white/10" />
+          <div className="mx-1 h-4 w-px bg-border" />
 
           <button
             onClick={() => setLastDays(7)}
-            className="rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10"
+            className="rounded-xl border border-border bg-secondary px-3 py-1.5 text-xs text-foreground/80 hover:bg-secondary/80 focus-ring"
           >
             Last 7d
           </button>
           <button
             onClick={() => setLastDays(30)}
-            className="rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10"
+            className="rounded-xl border border-border bg-secondary px-3 py-1.5 text-xs text-foreground/80 hover:bg-secondary/80 focus-ring"
           >
             Last 30d
           </button>
           <button
             onClick={clearRange}
-            className="rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10"
+            className="rounded-xl border border-border bg-secondary px-3 py-1.5 text-xs text-foreground/80 hover:bg-secondary/80 focus-ring"
           >
             All time
           </button>
@@ -429,7 +427,10 @@ export default function DashboardPage() {
 
       {/* Errors */}
       {error && (
-        <div className="rounded-2xl border border-rose-400/30 bg-rose-500/10 p-4 text-rose-200">
+        <div
+          className="rounded-2xl border border-destructive/40 bg-destructive/10 p-4 text-destructive-foreground"
+          role="alert"
+        >
           {error.message}
         </div>
       )}
@@ -447,8 +448,8 @@ export default function DashboardPage() {
             <Card>
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-white/60">Average Score</p>
-                  <p className="mt-1 text-2xl font-semibold">{avg}</p>
+                  <p className="text-sm text-muted-foreground">Average Score</p>
+                  <p className="mt-1 text-2xl font-semibold text-foreground">{avg}</p>
                 </div>
                 <TrendingUp className="h-6 w-6 text-accent-400" />
               </div>
@@ -457,20 +458,20 @@ export default function DashboardPage() {
             <Card>
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-white/60">Sessions</p>
-                  <p className="mt-1 text-2xl font-semibold">{filtered.length}</p>
+                  <p className="text-sm text-muted-foreground">Sessions</p>
+                  <p className="mt-1 text-2xl font-semibold text-foreground">{filtered.length}</p>
                 </div>
-                <Target className="h-6 w-6 text-brand-300" />
+                <Target className="h-6 w-6 text-brand-500" />
               </div>
             </Card>
 
             <Card>
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-white/60">Total Minutes</p>
-                  <p className="mt-1 text-2xl font-semibold">{totalMin}</p>
+                  <p className="text-sm text-muted-foreground">Total Minutes</p>
+                  <p className="mt-1 text-2xl font-semibold text-foreground">{totalMin}</p>
                 </div>
-                <Clock className="h-6 w-6 text-white/70" />
+                <Clock className="h-6 w-6 text-muted-foreground" />
               </div>
             </Card>
           </>
@@ -480,14 +481,14 @@ export default function DashboardPage() {
       {/* By role summary */}
       {!loading && byRole.length > 0 && (
         <section className="space-y-3">
-          <h3 className="text-lg font-medium">By role</h3>
+          <h3 className="text-lg font-medium text-foreground">By role</h3>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {byRole.map((r) => (
               <Card key={r.role}>
                 <div className="flex items-center justify-between">
                   <div className="min-w-0">
-                    <p className="truncate font-medium">{r.role}</p>
-                    <p className="mt-1 text-xs text-white/60">
+                    <p className="truncate font-medium text-foreground">{r.role}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
                       {r.count} session{r.count === 1 ? "" : "s"} • {r.minutes} min
                     </p>
                   </div>
@@ -502,11 +503,11 @@ export default function DashboardPage() {
       {/* Recent Sessions (filtered) */}
       <section className="space-y-3">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-medium">Recent Sessions</h2>
+          <h2 className="text-lg font-medium text-foreground">Recent Sessions</h2>
           {!loading && (
             <button
               onClick={() => refetch().catch(() => {})}
-              className="text-sm text-white/70 underline underline-offset-4 hover:text-white"
+              className="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground focus-ring rounded"
               title="Refresh"
             >
               Refresh
@@ -517,29 +518,30 @@ export default function DashboardPage() {
         {loading ? (
           <ListSkeleton />
         ) : filtered.length === 0 ? (
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-sm text-white/70">
+          <div className="rounded-2xl border border-border bg-card p-6 text-sm text-muted-foreground">
             No sessions for the selected filters. Adjust Role/Date above or seed more data.
           </div>
         ) : (
-          <div className="overflow-hidden rounded-2xl divide-y divide-white/10 border border-white/10">
+          <div className="overflow-hidden rounded-2xl border border-border">
             {filtered.map((a) => (
               <div
                 key={a.id}
-                className="flex items-center justify-between bg-white/[0.03] px-4 py-3 hover:bg-white/[0.06]"
+                className="flex items-center justify-between bg-card px-4 py-3 transition-colors hover:bg-secondary"
               >
                 <div className="min-w-0">
-                  <p className="truncate font-medium">{a.role}</p>
-                  <p className="text-xs text-white/60">{fmtDate(a.date)}</p>
+                  <p className="truncate font-medium text-foreground">{a.role}</p>
+                  <p className="text-xs text-muted-foreground">{fmtDate(a.date)}</p>
                 </div>
 
                 <div className="flex items-center gap-4">
-                  <span className="text-sm text-white/70">{a.duration_min} min</span>
+                  <span className="text-sm text-muted-foreground">{a.duration_min} min</span>
                   <span className={`text-xl font-bold ${scoreClass(a.score)}`}>{a.score}</span>
 
                   <button
-                    className="ml-2 inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-white/80 hover:bg-white/10"
+                    className="ml-2 inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-secondary text-foreground/80 hover:bg-secondary/80 focus-ring"
                     title="Delete attempt"
                     onClick={() => deleteWithUndo(a)}
+                    aria-label={`Delete attempt for ${a.role} on ${fmtDate(a.date)}`}
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>

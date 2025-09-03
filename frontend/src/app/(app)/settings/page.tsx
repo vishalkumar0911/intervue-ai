@@ -1,3 +1,4 @@
+// src/app/(app)/settings/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -6,17 +7,19 @@ import { toast } from "sonner";
 
 import { useAuth } from "@/components/auth/AuthProvider";
 import { updateProfile } from "@/lib/auth";
+import { Card } from "@/components/Card";
+import { Button } from "@/components/ui/Button";
 
 export default function SettingsPage() {
   const router = useRouter();
   const { user, loading } = useAuth();
 
-  const [name, setName]   = useState("");
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [role, setRole]   = useState("");
+  const [role, setRole] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // Prefill from auth
+  // Prefill from auth (redirect if not logged in)
   useEffect(() => {
     if (loading) return;
     if (!user) {
@@ -42,49 +45,87 @@ export default function SettingsPage() {
     }
   }
 
+  if (loading) {
+    return (
+      <div className="max-w-2xl space-y-6">
+        <h1 className="text-2xl font-semibold">Settings</h1>
+        <div className="rounded-2xl border border-border bg-card p-6 animate-pulse">
+          <div className="h-4 w-40 rounded bg-muted/60" />
+          <div className="mt-3 h-10 w-full rounded-xl bg-muted/60" />
+          <div className="mt-5 h-4 w-24 rounded bg-muted/60" />
+          <div className="mt-3 h-10 w-full rounded-xl bg-muted/60" />
+          <div className="mt-5 h-4 w-52 rounded bg-muted/60" />
+          <div className="mt-3 h-10 w-full rounded-xl bg-muted/60" />
+          <div className="mt-6 h-10 w-32 rounded-xl bg-primary/60" />
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-6 max-w-2xl">
+    <div className="max-w-2xl space-y-6">
       <h1 className="text-2xl font-semibold">Settings</h1>
 
-      <form onSubmit={onSave} className="rounded-2xl border border-white/10 bg-white/5 p-6 space-y-4">
-        <div>
-          <label className="block text-sm text-white/70 mb-1">Display name</label>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 outline-none focus:border-brand-400/60"
-            placeholder="Your name"
-            required
-          />
-        </div>
+      <Card>
+        <form onSubmit={onSave} aria-busy={saving} className="space-y-5">
+          {/* Display name */}
+          <div>
+            <label htmlFor="displayName" className="mb-1 block text-sm text-muted-foreground">
+              Display name
+            </label>
+            <input
+              id="displayName"
+              type="text"
+              autoComplete="name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full rounded-xl border border-input bg-transparent px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/70 focus-ring"
+              placeholder="Your name"
+              required
+              disabled={saving}
+            />
+          </div>
 
-        <div>
-          <label className="block text-sm text-white/70 mb-1">Email</label>
-          <input
-            value={email}
-            readOnly
-            disabled
-            className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-white/80"
-          />
-        </div>
+          {/* Email (read-only, copyable) */}
+          <div>
+            <label htmlFor="email" className="mb-1 block text-sm text-muted-foreground">
+              Email (read-only)
+            </label>
+            <input
+              id="email"
+              type="email"
+              autoComplete="email"
+              value={email}
+              readOnly
+              aria-readonly="true"
+              className="w-full rounded-xl border border-input bg-secondary/60 px-3 py-2 text-sm text-muted-foreground cursor-text"
+            />
+          </div>
 
-        <div>
-          <label className="block text-sm text-white/70 mb-1">Preferred role (optional)</label>
-          <input
-            value={role}
-            onChange={(e) => setRole(e.target.value)}
-            className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 outline-none focus:border-brand-400/60"
-            placeholder="e.g. Backend Developer"
-          />
-        </div>
+          {/* Preferred role */}
+          <div>
+            <label htmlFor="role" className="mb-1 block text-sm text-muted-foreground">
+              Preferred role <span className="opacity-60">(optional)</span>
+            </label>
+            <input
+              id="role"
+              type="text"
+              autoComplete="organization-title"
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+              className="w-full rounded-xl border border-input bg-transparent px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/70 focus-ring"
+              placeholder="e.g. Backend Developer"
+              disabled={saving}
+            />
+          </div>
 
-        <button
-          disabled={saving}
-          className="rounded-xl bg-brand-600 px-4 py-2 text-sm font-medium hover:bg-brand-500 disabled:opacity-60"
-        >
-          {saving ? "Saving..." : "Save changes"}
-        </button>
-      </form>
+          <div className="pt-1">
+            <Button type="submit" isLoading={saving}>
+              Save changes
+            </Button>
+          </div>
+        </form>
+      </Card>
     </div>
   );
 }

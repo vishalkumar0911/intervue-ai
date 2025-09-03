@@ -5,15 +5,18 @@ import csv
 import hashlib
 import io
 import json
+import os
 import random
+import threading
 import time
 import uuid
 from collections import defaultdict, deque
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from uuid import UUID
 
+from app.models import Question, AttemptCreate, Attempt, AttemptUpdate
 from fastapi import (
     Body,
     Depends,
@@ -22,15 +25,13 @@ from fastapi import (
     Query,
     Request,
     Response,
-    status,
 )
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
-from pydantic import BaseModel, Field, ValidationError
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import ValidationError
 from pydantic_settings import BaseSettings
 from starlette.middleware.gzip import GZipMiddleware
-
 
 # -------------------- Settings --------------------
 class Settings(BaseSettings):
@@ -50,7 +51,6 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-
 # -------------------- App --------------------
 tags_metadata = [
     {"name": "health", "description": "Health and server info"},
@@ -63,7 +63,7 @@ tags_metadata = [
 
 app = FastAPI(
     title="Intervue.AI API",
-    version="1.4.0",
+    version="1.5.0",
     openapi_tags=tags_metadata,
 )
 
@@ -79,41 +79,6 @@ app.add_middleware(
 
 # GZip compression
 app.add_middleware(GZipMiddleware, minimum_size=500)
-
-
-# -------------------- Models --------------------
-class Question(BaseModel):
-    id: str
-    role: str
-    text: str
-    topic: Optional[str] = None
-    difficulty: Optional[str] = "easy"
-
-
-# Attempts: support optional difficulty (so Analytics can stack by difficulty)
-class AttemptCreate(BaseModel):
-    role: str
-    score: int = Field(ge=0, le=100)
-    duration_min: int = Field(ge=0)
-    date: Optional[datetime] = None  # allow client to provide, otherwise now()
-    difficulty: Optional[str] = Field(
-        default=None,
-        description="Optional tag: easy|medium|hard",
-    )
-
-
-class Attempt(AttemptCreate):
-    id: str
-    date: datetime  # required in stored model
-
-
-class AttemptUpdate(BaseModel):
-    role: Optional[str] = None
-    score: Optional[int] = Field(default=None, ge=0, le=100)
-    duration_min: Optional[int] = Field(default=None, ge=0)
-    date: Optional[datetime] = None
-    difficulty: Optional[str] = None
-
 
 # -------------------- Data loading --------------------
 QUESTIONS: Dict[str, List[Question]] = {}
@@ -169,18 +134,13 @@ def startup() -> None:
     if not p.exists():
         p.touch()
 
-
 # -------------------- Security & Rate limiting --------------------
 def require_api_key(request: Request):
-    """
-    Optional API key guard for MUTATING endpoints.
-    If BACKEND_API_KEY is unset, allow everything (dev mode).
-    """
     if not settings.BACKEND_API_KEY:
-        return  # no-op
+        return
     key = request.headers.get("x-api-key") or request.query_params.get("api_key")
     if not key or key != settings.BACKEND_API_KEY:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing API key")
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 # per-IP sliding window limiter {ip -> deque[timestamps]}
@@ -192,7 +152,6 @@ def _rate_limit(request: Request, bucket: dict[str, deque[float]], rate: int, wi
     ip = request.client.host if request.client else "unknown"
     now = time.time()
     dq = bucket[ip]
-    # prune old
     while dq and now - dq[0] > window:
         dq.popleft()
     if len(dq) >= rate:
@@ -207,6 +166,51 @@ def rl_read_dep(request: Request):
 def rl_mutate_dep(request: Request):
     _rate_limit(request, _ip_hits_mutate, settings.RL_MUTATE_RATE)
 
+# -------------------- Windows-safe IO helpers --------------------
+
+ATTEMPTS_LOCK = threading.Lock()  # guard all writers
+
+def _parse_dt(val: Any) -> Optional[datetime]:
+    if isinstance(val, datetime):
+        return val
+    if isinstance(val, str):
+        s = val.strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        try:
+            return datetime.fromisoformat(s)
+        except Exception:
+            return None
+    return None
+
+def _to_iso_z(val: Any) -> str:
+    """
+    Normalize any datetime/ISO-ish string to strict UTC with trailing 'Z'.
+    On failure, returns str(val).
+    """
+    dt = _parse_dt(val)
+    if dt is None:
+        try:
+            return str(val)
+        except Exception:
+            return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.isoformat().replace("+00:00", "Z")
+
+def _replace_with_retry(src: Path, dst: Path, attempts: int = 8, delay: float = 0.2) -> None:
+    """
+    Atomic replace with small exponential backoff for Windows file locks.
+    """
+    for i in range(attempts):
+        try:
+            os.replace(src, dst)  # atomic on same volume
+            return
+        except PermissionError:
+            time.sleep(delay * (i + 1))
+    os.replace(src, dst)
 
 # -------------------- Helpers --------------------
 def _filtered_bank(role: str, difficulty: Optional[str]) -> List[Question]:
@@ -218,12 +222,21 @@ def _filtered_bank(role: str, difficulty: Optional[str]) -> List[Question]:
         bank = [q for q in bank if (q.difficulty or "").lower() == d]
     return bank
 
-
 def _append_attempt_jsonl(a: Attempt) -> None:
+    """
+    Append one attempt to JSONL with normalized ISO UTC 'date'.
+    Writer is guarded by ATTEMPTS_LOCK.
+    """
     p = attempts_path()
-    with p.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(a.model_dump(), default=str) + "\n")
-
+    rec = a.model_dump()
+    rec["date"] = _to_iso_z(rec.get("date", datetime.now(timezone.utc)))
+    body = json.dumps(rec, ensure_ascii=False, separators=(",", ":"))
+    with ATTEMPTS_LOCK:
+        with p.open("a", encoding="utf-8", newline="\n") as f:
+            f.write(body + "\n")
+            # optional: ensure durability after append
+            f.flush()
+            os.fsync(f.fileno())
 
 def _read_attempts_jsonl(limit: int = 100, role: Optional[str] = None) -> List[Attempt]:
     p = attempts_path()
@@ -244,34 +257,41 @@ def _read_attempts_jsonl(limit: int = 100, role: Optional[str] = None) -> List[A
                 continue
     return out[::-1][:limit]  # most recent first
 
-
 def _rewrite_attempts_jsonl(transform: Callable[[dict], Optional[dict]]) -> int:
     """
     Read all attempts, call transform(rec_dict) -> rec_dict | None.
     If transform returns None, the record is dropped.
-    Rewrites the file; returns number of records written.
+    Rewrites the file atomically; returns number of records written.
+    Guarded by ATTEMPTS_LOCK to avoid concurrent writers.
     """
     p = attempts_path()
     if not p.exists():
         return 0
     tmp = p.with_suffix(".tmp")
     count = 0
-    with p.open("r", encoding="utf-8") as fin, tmp.open("w", encoding="utf-8") as fout:
-        for line in fin:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except Exception:
-                continue
-            new_rec = transform(rec)
-            if new_rec is not None:
-                fout.write(json.dumps(new_rec, default=str) + "\n")
-                count += 1
-    tmp.replace(p)
+    with ATTEMPTS_LOCK:
+        with p.open("r", encoding="utf-8") as fin, tmp.open("w", encoding="utf-8", newline="\n") as fout:
+            for line in fin:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                new_rec = transform(rec)
+                if new_rec is not None:
+                    if "date" in new_rec:
+                        new_rec["date"] = _to_iso_z(new_rec["date"])
+                    else:
+                        new_rec["date"] = _to_iso_z(datetime.now(timezone.utc))
+                    fout.write(json.dumps(new_rec, ensure_ascii=False, separators=(",", ":")) + "\n")
+                    count += 1
+            # ensure data is on disk before replace (Windows safety)
+            fout.flush()
+            os.fsync(fout.fileno())
+        _replace_with_retry(tmp, p)
     return count
-
 
 def _etag_json(request: Request, data: Any, max_age: int = 30) -> Response:
     """
@@ -285,7 +305,6 @@ def _etag_json(request: Request, data: Any, max_age: int = 30) -> Response:
         return Response(status_code=304, headers=headers)
     return Response(content=body, media_type="application/json", headers=headers)
 
-
 # -------------------- Error handlers --------------------
 @app.exception_handler(ValidationError)
 async def on_validation_error(_: Request, exc: ValidationError):
@@ -294,17 +313,14 @@ async def on_validation_error(_: Request, exc: ValidationError):
         content={"detail": exc.errors(), "message": "Validation failed"},
     )
 
-
 @app.exception_handler(Exception)
 async def on_unhandled(_: Request, exc: Exception):
-    # Let HTTPException bubble via default handler; otherwise return 500
     if isinstance(exc, HTTPException):
         raise exc
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal server error", "message": str(exc)},
     )
-
 
 # -------------------- Health --------------------
 @app.get("/health", tags=["health"])
@@ -325,7 +341,6 @@ def health():
         "server_time": time.time(),
     }
 
-
 # -------------------- Question Endpoints --------------------
 @app.get("/roles", response_model=List[str], tags=["questions"], dependencies=[Depends(rl_read_dep)])
 def roles(request: Request):
@@ -333,7 +348,6 @@ def roles(request: Request):
     hot_reload_if_changed()
     data = sorted(QUESTIONS.keys())
     return _etag_json(request, data, max_age=60)
-
 
 @app.get(
     "/questions",
@@ -362,9 +376,7 @@ def list_questions(
         rng = random.Random(seed)
         rng.shuffle(bank)
     end = min(offset + limit, len(bank))
-    # ETag aids client caching of the bank slice
     return _etag_json(request, bank[offset:end], max_age=30)
-
 
 @app.get("/question/next", response_model=Question, tags=["questions"], dependencies=[Depends(rl_read_dep)])
 def next_question(
@@ -379,7 +391,6 @@ def next_question(
         raise HTTPException(status_code=404, detail="No questions for role/difficulty")
     return bank[index % len(bank)]
 
-
 @app.get("/questions/random", response_model=Question, tags=["questions"], dependencies=[Depends(rl_read_dep)])
 def random_question(
     role: str,
@@ -393,7 +404,6 @@ def random_question(
         raise HTTPException(status_code=404, detail="No questions for role/difficulty")
     rng = random.Random(seed)
     return rng.choice(bank)
-
 
 # -------------------- Search --------------------
 @app.get("/search", response_model=List[Question], tags=["search"], dependencies=[Depends(rl_read_dep)])
@@ -418,7 +428,6 @@ def search(
     ]
     return results[:limit]
 
-
 # -------------------- Attempts Endpoints --------------------
 @app.get("/attempts", response_model=List[Attempt], tags=["attempts"], dependencies=[Depends(rl_read_dep)])
 def get_attempts(
@@ -427,7 +436,6 @@ def get_attempts(
 ):
     """Return most recent attempts (newest first)."""
     return _read_attempts_jsonl(limit=limit, role=role)
-
 
 # Put export BEFORE dynamic routes to avoid shadowing.
 @app.get("/attempts/export", tags=["attempts"], dependencies=[Depends(rl_read_dep)])
@@ -453,7 +461,7 @@ def export_attempts(role: Optional[str] = Query(None)):
                     it.role,
                     it.score,
                     it.duration_min,
-                    it.date.isoformat() if hasattr(it.date, "isoformat") else str(it.date),
+                    _to_iso_z(getattr(it, "date", "")),
                     it.difficulty or "",
                 ]
             )
@@ -464,7 +472,6 @@ def export_attempts(role: Optional[str] = Query(None)):
     headers = {"Content-Disposition": 'attachment; filename="attempts.csv"'}
     return StreamingResponse(iter_csv(), media_type="text/csv", headers=headers)
 
-
 @app.get("/attempts/{attempt_id}", response_model=Attempt, tags=["attempts"], dependencies=[Depends(rl_read_dep)])
 def get_attempt_by_id(attempt_id: UUID):
     aid = str(attempt_id)
@@ -473,7 +480,6 @@ def get_attempt_by_id(attempt_id: UUID):
         if a.id == aid:
             return a
     raise HTTPException(status_code=404, detail="Attempt not found")
-
 
 @app.post(
     "/attempts",
@@ -493,7 +499,7 @@ def add_attempt(payload: AttemptCreate = Body(...)):
         role=payload.role,
         score=payload.score,
         duration_min=payload.duration_min,
-        date=payload.date or datetime.utcnow(),
+        date=payload.date or datetime.now(timezone.utc),  # timezone-aware UTC
         difficulty=payload.difficulty,
     )
     try:
@@ -501,7 +507,6 @@ def add_attempt(payload: AttemptCreate = Body(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save attempt: {e}")
     return attempt
-
 
 @app.delete(
     "/attempts/{attempt_id}",
@@ -525,7 +530,6 @@ def delete_attempt(attempt_id: UUID):
         raise HTTPException(status_code=404, detail="Attempt not found")
     return {"ok": True, "deleted": 1, "id": aid}
 
-
 @app.patch(
     "/attempts/{attempt_id}",
     response_model=Attempt,
@@ -546,7 +550,7 @@ def update_attempt(attempt_id: UUID, patch: AttemptUpdate):
             role = rec.get("role")
         score = patch.score if patch.score is not None else rec.get("score")
         duration_min = patch.duration_min if patch.duration_min is not None else rec.get("duration_min")
-        date = (patch.date.isoformat() if hasattr(patch.date, "isoformat") else patch.date) if patch.date is not None else rec.get("date")
+        date_val = patch.date if patch.date is not None else rec.get("date")
         difficulty = patch.difficulty if patch.difficulty is not None else rec.get("difficulty")
         if difficulty and difficulty not in {"easy", "medium", "hard"}:
             difficulty = rec.get("difficulty")
@@ -556,7 +560,7 @@ def update_attempt(attempt_id: UUID, patch: AttemptUpdate):
             "role": role,
             "score": score,
             "duration_min": duration_min,
-            "date": date,
+            "date": _to_iso_z(date_val),
             "difficulty": difficulty,
         }
         try:
@@ -570,7 +574,6 @@ def update_attempt(attempt_id: UUID, patch: AttemptUpdate):
     if not updated:
         raise HTTPException(status_code=404, detail="Attempt not found")
     return updated
-
 
 # -------------------- Stats --------------------
 @app.get("/stats", tags=["stats"], dependencies=[Depends(rl_read_dep)])
@@ -601,7 +604,6 @@ def stats():
         "attempts_by_difficulty": dict(by_diff),
     }
 
-
 # -------------------- Developer utilities --------------------
 @app.post(
     "/dev/seed",
@@ -627,7 +629,7 @@ def dev_seed(
             role=r,
             score=rng.randint(35, 95),
             duration_min=rng.randint(8, 32),
-            date=datetime.utcnow(),
+            date=datetime.now(timezone.utc),
             difficulty=rng.choice(["easy", "medium", "hard"]),
         )
         _append_attempt_jsonl(attempt)

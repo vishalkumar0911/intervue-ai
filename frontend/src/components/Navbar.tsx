@@ -15,10 +15,10 @@ type NavLinkProps = Item & { active?: boolean; onClick?: () => void };
 
 function NavLink({ href, label, active = false, onClick }: NavLinkProps) {
   const base =
-    "relative rounded-lg px-2 py-1 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60";
+    "relative rounded-lg px-3 py-2 text-sm transition-colors focus-ring";
   const cls = active
-    ? "text-slate-900 dark:text-white"
-    : "text-slate-700 hover:text-slate-900 dark:text-white/80 dark:hover:text-white";
+    ? "text-foreground bg-secondary/60"
+    : "text-muted-foreground hover:text-foreground hover:bg-secondary/60";
 
   return (
     <Link
@@ -29,7 +29,7 @@ function NavLink({ href, label, active = false, onClick }: NavLinkProps) {
     >
       {label}
       {active && (
-        <span className="pointer-events-none absolute inset-x-1 -bottom-1 h-[2px] rounded-full bg-gradient-to-r from-brand-400 to-accent-400" />
+        <span className="pointer-events-none absolute inset-x-3 -bottom-1 h-[2px] rounded-full bg-gradient-to-r from-brand-400 to-cyan-400" />
       )}
     </Link>
   );
@@ -75,13 +75,13 @@ function UserMenu() {
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="menu"
         aria-expanded={open}
-        className="group inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-2 py-1.5 text-sm text-white/90 hover:bg-white/10"
+        className="group inline-flex items-center gap-2 rounded-xl border border-border bg-secondary/60 px-2 py-1.5 text-sm text-foreground hover:bg-secondary focus-ring"
       >
-        <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-brand-600 text-white text-xs">
+        <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs">
           {initialsFrom(firstLabel)}
         </span>
-        <span className="hidden sm:inline">{firstLabel}</span>
-        <ChevronDown size={14} className="opacity-80 group-hover:opacity-100" />
+        <span className="hidden sm:inline text-foreground/90">{firstLabel}</span>
+        <ChevronDown size={14} className="opacity-80 group-hover:opacity-100 transition-transform data-[open=true]:rotate-180" data-open={open} />
       </button>
 
       {open && (
@@ -94,23 +94,18 @@ function UserMenu() {
           />
           <div
             role="menu"
-            className="absolute right-0 mt-2 z-[90] w-56 overflow-hidden rounded-xl
-                       border border-black/10 bg-white text-slate-900 shadow-xl
-                       dark:border-white/10 dark:bg-slate-900 dark:text-white"
+            className="absolute right-0 mt-2 z-[90] w-56 overflow-hidden rounded-xl surface"
           >
-            <div className="px-3 py-2 text-xs text-slate-600 dark:text-white/70">
+            <div className="px-3 py-2 text-xs text-muted-foreground">
               Signed in as
-              <div className="truncate text-slate-900 dark:text-white">
-                {user.email ?? "unknown"}
-              </div>
+              <div className="truncate text-foreground">{user.email ?? "unknown"}</div>
             </div>
-            <div className="my-1 h-px bg-black/10 dark:bg-white/10" />
+            <div className="my-1 h-px bg-border" />
 
             <Link
               role="menuitem"
               href="/dashboard"
-              className="block px-3 py-2 text-sm text-slate-700 hover:bg-slate-50
-                         dark:text-white/80 dark:hover:bg-white/10"
+              className="block px-3 py-2 text-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
               onClick={() => setOpen(false)}
             >
               Dashboard
@@ -118,8 +113,7 @@ function UserMenu() {
             <Link
               role="menuitem"
               href="/settings"
-              className="block px-3 py-2 text-sm text-slate-700 hover:bg-slate-50
-                         dark:text-white/80 dark:hover:bg-white/10"
+              className="block px-3 py-2 text-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
               onClick={() => setOpen(false)}
             >
               Settings
@@ -132,8 +126,7 @@ function UserMenu() {
                 router.push("/login");
               }}
               className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm
-                         text-rose-600 hover:bg-rose-50
-                         dark:text-rose-200 dark:hover:bg-rose-500/10"
+                         text-destructive hover:bg-destructive/10"
             >
               <LogOut size={16} />
               Sign out
@@ -166,13 +159,23 @@ export function Navbar() {
   }, [pathname]);
 
   return (
-    <header className="sticky top-0 z-[80] border-b border-black/10 bg-white/70 backdrop-blur supports-[backdrop-filter]:bg-white/70 dark:border-white/10 dark:bg-black/20">
-      <div className="mx-auto w-full max-w-7xl px-4 md:px-6">
+    <header className="nav-glass sticky top-0 z-50">
+      {/* Skip link for a11y */}
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-2
+                   z-[1000] rounded-md bg-primary px-3 py-2 text-primary-foreground
+                   focus-ring"
+      >
+        Skip to content
+      </a>
+
+      <div className="container">
         <div className="flex h-14 items-center justify-between">
           {/* Left: Mobile burger + brand */}
           <div className="flex items-center gap-2">
             <button
-              className="md:hidden inline-flex h-10 w-10 items-center justify-center rounded-xl border border-black/10 bg-black/[0.04] hover:bg-black/[0.06] dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10"
+              className="md:hidden inline-flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-secondary/60 hover:bg-secondary focus-ring"
               aria-label={open ? "Close menu" : "Open menu"}
               aria-expanded={open}
               aria-controls="mobile-menu"
@@ -182,7 +185,7 @@ export function Navbar() {
             </button>
 
             <Link href="/" className="ml-1">
-              <span className="bg-gradient-to-r from-brand-400 to-accent-400 bg-clip-text text-lg font-bold text-transparent">
+              <span className="bg-gradient-to-r from-brand-400 to-cyan-400 bg-clip-text text-lg font-bold text-transparent">
                 Intervue.AI
               </span>
               <span className="sr-only">Go to home</span>
@@ -190,7 +193,7 @@ export function Navbar() {
           </div>
 
           {/* Center: primary nav (desktop only) */}
-          <nav className="hidden md:flex items-center gap-2">
+          <nav className="hidden md:flex items-center gap-1" aria-label="Primary">
             {items.map((i) => (
               <NavLink key={i.href} {...i} />
             ))}
@@ -200,7 +203,7 @@ export function Navbar() {
           <div className="flex items-center gap-2">
             <Link
               href="/interview"
-              className="hidden sm:inline-flex items-center justify-center rounded-xl bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-500 transition-colors"
+              className="hidden sm:inline-flex btn-primary"
               title="Start interview"
             >
               Start
@@ -210,16 +213,10 @@ export function Navbar() {
               <UserMenu />
             ) : (
               <>
-                <Link
-                  href="/login"
-                  className="hidden sm:inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/80 hover:bg-white/10"
-                >
+                <Link href="/login" className="hidden sm:inline-flex btn-secondary">
                   Sign in
                 </Link>
-                <Link
-                  href="/signup"
-                  className="hidden sm:inline-flex items-center justify-center rounded-xl bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-500"
-                >
+                <Link href="/signup" className="hidden sm:inline-flex btn-primary">
                   Sign up
                 </Link>
               </>
@@ -230,26 +227,26 @@ export function Navbar() {
         {/* Mobile panel */}
         {open && (
           <div className="md:hidden pb-3" id="mobile-menu">
-            <nav className="grid gap-1 rounded-2xl border border-black/10 bg-white p-2 dark:border-white/10 dark:bg-slate-900">
+            <nav className="grid gap-1 rounded-2xl surface p-2" aria-label="Mobile">
               {items.map((i) => (
                 <NavLink key={i.href} {...i} onClick={() => setOpen(false)} />
               ))}
 
-              <div className="my-2 h-px bg-black/10 dark:bg-white/10" />
+              <div className="my-2 h-px bg-border" />
 
               {user ? (
                 <>
                   <Link
                     href="/dashboard"
                     onClick={() => setOpen(false)}
-                    className="rounded-xl px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:text-white/80 dark:hover:bg-white/10"
+                    className="rounded-xl px-3 py-2 text-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
                   >
                     Dashboard
                   </Link>
                   <Link
                     href="/settings"
                     onClick={() => setOpen(false)}
-                    className="rounded-xl px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:text-white/80 dark:hover:bg-white/10"
+                    className="rounded-xl px-3 py-2 text-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
                   >
                     Settings
                   </Link>
@@ -259,7 +256,7 @@ export function Navbar() {
                       logout();
                       router.push("/login");
                     }}
-                    className="rounded-xl px-3 py-2 text-left text-sm text-rose-600 hover:bg-rose-50 dark:text-rose-200 dark:hover:bg-rose-500/10"
+                    className="rounded-xl px-3 py-2 text-left text-sm text-destructive hover:bg-destructive/10"
                   >
                     Sign out
                   </button>
@@ -269,14 +266,14 @@ export function Navbar() {
                   <Link
                     href="/login"
                     onClick={() => setOpen(false)}
-                    className="rounded-xl px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:text-white/80 dark:hover:bg-white/10"
+                    className="rounded-xl px-3 py-2 text-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
                   >
                     Sign in
                   </Link>
                   <Link
                     href="/signup"
                     onClick={() => setOpen(false)}
-                    className="rounded-xl bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-500"
+                    className="rounded-xl btn-primary"
                   >
                     Sign up
                   </Link>
@@ -286,7 +283,7 @@ export function Navbar() {
               <Link
                 href="/interview"
                 onClick={() => setOpen(false)}
-                className="mt-1 inline-flex items-center justify-center rounded-xl bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-500 transition-colors"
+                className="mt-1 inline-flex btn-primary"
               >
                 Start interview
               </Link>
