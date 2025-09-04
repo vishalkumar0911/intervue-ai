@@ -1,3 +1,4 @@
+// frontend/src/components/Providers.tsx
 "use client";
 
 import React from "react";
@@ -6,23 +7,35 @@ import { SidebarProvider } from "@/components/shell/Sidebar";
 import { SessionProvider } from "next-auth/react";
 import { AuthProvider } from "@/components/auth/AuthProvider";
 import FirstVisitRedirect from "@/components/FirstVisitRedirect";
+import { usePathname } from "next/navigation";
+
+const PUBLIC_PREFIXES = [
+  "/login",
+  "/signup",
+  "/forgot-password",
+  "/reset-password",
+];
 
 export default function Providers({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  const isPublic = PUBLIC_PREFIXES.some((p) => pathname?.startsWith(p));
+
   return (
     <ThemeProvider
-      attribute="class"            // toggles .dark on <html>
-      defaultTheme="system"        // matches OS on first paint
+      attribute="class"
+      defaultTheme="system"
       enableSystem
-      disableTransitionOnChange    // avoids flash when switching
-      storageKey="intervue-theme"  // persistent + scoped key
+      disableTransitionOnChange
+      storageKey="intervue-theme"
     >
       <SessionProvider>
-      <AuthProvider>
-        <SidebarProvider>
-          <FirstVisitRedirect />
-          {children}
-        </SidebarProvider>
-      </AuthProvider>
+        <AuthProvider>
+          <SidebarProvider>
+            {/* Only run redirect logic on non-auth pages */}
+            {!isPublic && <FirstVisitRedirect />}
+            {children}
+          </SidebarProvider>
+        </AuthProvider>
       </SessionProvider>
     </ThemeProvider>
   );
