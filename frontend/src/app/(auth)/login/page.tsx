@@ -1,6 +1,5 @@
 "use client";
 
-import { signIn } from "next-auth/react";
 import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
@@ -9,6 +8,7 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { toast } from "sonner";
 import { useAuth } from "@/components/auth/AuthProvider";
+import { signIn } from "next-auth/react";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -63,13 +63,11 @@ export default function LoginPage() {
           value={pass}
           onChange={(e) => setPass(e.target.value)}
         />
-
         <p className="text-right text-sm">
           <Link href="/forgot-password" className="text-muted-foreground hover:text-foreground underline underline-offset-4">
             Forgot password?
           </Link>
         </p>
-
         <div className="pt-1">
           <Button type="submit" isLoading={loading} className="w-full">
             Sign in
@@ -85,7 +83,7 @@ export default function LoginPage() {
 
       <Button
         variant="secondary"
-        onClick={() => signIn("google", { callbackUrl: "/dashboard" })}
+        onClick={() => signIn("google", { callbackUrl: "/dashboard" }, { prompt: "select_account" })}
         className="mt-3 w-full"
       >
         Continue with Google
