@@ -1,5 +1,6 @@
 "use client";
 
+import { signIn } from "next-auth/react";
 import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
@@ -84,7 +85,7 @@ export default function LoginPage() {
 
       <Button
         variant="secondary"
-        onClick={() => toast.info("Social login not enabled yet")}
+        onClick={() => signIn("google", { callbackUrl: "/dashboard" })}
         className="mt-3 w-full"
       >
         Continue with Google
