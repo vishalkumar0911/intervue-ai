@@ -6,7 +6,7 @@ watchfiles==1.1.0
 python-dotenv==1.1.1
 PyJWT>=2.8
 requests>=2.32
-email-validator>=2.1
+email-validator>=2.2
 
 # These are pulled automatically by the lines above, so no need to pin:
 # starlette, anyio, h11, idna, pydantic-core, annotated-types, typing-extensions, typing-inspection
