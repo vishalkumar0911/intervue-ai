@@ -1,34 +1,91 @@
-// Demo/local auth persistence. Not for production.
+// src/lib/auth.ts
+// Demo/local auth persistence (browser-only). NOT for production.
+// - Stores users in localStorage (keyed by email).
+// - signup/login/logout/updateProfile
+// - Password flows: updatePasswordLocal (aka resetPasswordByEmail), changePassword
+// - Salted SHA-256 (demo) with backward-compat migration from legacy unsalted
+// - Safer JSON parsing, email normalization, small DX helpers.
 
 export type User = { id: string; name: string; email: string; role?: string };
 
 type StoredUser = User & {
-  passwordHash: string;
-  createdAt: number;
+  passwordHash: string;   // hash of the password
+  createdAt: number;      // epoch ms
+  // NEW (optional for legacy compatibility)
+  salt?: string;          // presence ⇒ salted hash is in use
+  algo?: "s256" | "sha256-legacy"; // tag the algo to aid future migrations
 };
 
 const USERS_KEY   = "auth:users";     // Record<email, StoredUser>
 const SESSION_KEY = "auth:session";   // current session email
-const LEGACY_KEY  = "auth:user";      // old shape (migrated once)
+const LEGACY_KEY  = "auth:user";      // legacy shape (migrated once)
 
-function isBrowser() { return typeof window !== "undefined"; }
-function assertBrowser() { if (!isBrowser()) throw new Error("auth.ts must run in the browser"); }
+// ---------------------------------- utils ----------------------------------
+
+function isBrowser() {
+  return typeof window !== "undefined" && typeof localStorage !== "undefined";
+}
+function assertBrowser() {
+  if (!isBrowser()) throw new Error("auth.ts must run in the browser");
+}
+
+/** normalize emails consistently (trim + lowercase) */
+function normalizeEmail(e: string) {
+  return (e || "").trim().toLowerCase();
+}
+
+/** safe JSON parse */
+function safeParse<T>(val: string | null, fallback: T): T {
+  try {
+    return val ? (JSON.parse(val) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** broadcast small event; cross-tab sync is handled by window "storage" */
+function emit() {
+  try { window.dispatchEvent(new Event("auth:changed")); } catch {}
+}
+
+/** tiny error helper that preserves .message and adds a code */
+function err(message: string, code?: string) {
+  const e: any = new Error(message);
+  if (code) e.code = code;
+  return e;
+}
+
+// -------------------------------- validators --------------------------------
+
+export function isValidEmail(input: string) {
+  const email = normalizeEmail(input);
+  const re = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+  return re.test(email);
+}
+
+export function isStrongPassword(pw: string) {
+  // Practical (demo): at least 8 chars, letters + numbers/symbols
+  return pw.length >= 8 && /[A-Za-z]/.test(pw) && /[^A-Za-z]/.test(pw);
+}
+
+// ------------------------------- storage i/o --------------------------------
 
 function readUsers(): Record<string, StoredUser> {
   assertBrowser();
-  try { return JSON.parse(localStorage.getItem(USERS_KEY) || "{}"); }
-  catch { return {}; }
+  return safeParse<Record<string, StoredUser>>(localStorage.getItem(USERS_KEY), {});
 }
 function writeUsers(users: Record<string, StoredUser>) {
   localStorage.setItem(USERS_KEY, JSON.stringify(users));
 }
+
+/** public projection */
 function pub(u: StoredUser): User {
   const { id, name, email, role } = u;
   return { id, name, email, role };
 }
-function emit() { try { window.dispatchEvent(new Event("auth:changed")); } catch {} }
 
-// --- migrate old `auth:user` value (either {user,pass} or plain user) ---
+// ----------------------------- legacy migration -----------------------------
+
 function migrateLegacyIfNeeded() {
   if (!isBrowser()) return;
   const raw = localStorage.getItem(LEGACY_KEY);
@@ -45,7 +102,7 @@ function migrateLegacyIfNeeded() {
     }
 
     if (user?.email) {
-      const email = user.email.toLowerCase();
+      const email = normalizeEmail(user.email);
       const users = readUsers();
       if (!users[email]) {
         users[email] = {
@@ -55,52 +112,102 @@ function migrateLegacyIfNeeded() {
           role: undefined,
           passwordHash: "",
           createdAt: Date.now(),
+          algo: "sha256-legacy",
         };
         writeUsers(users);
       }
       localStorage.setItem(SESSION_KEY, email);
     }
   } catch {
-    // ignore
+    // ignore parse errors
   } finally {
     localStorage.removeItem(LEGACY_KEY);
   }
 }
 
-async function hash(s: string): Promise<string> {
+// ---------------------------------- crypto ----------------------------------
+
+async function hashRaw(s: string): Promise<string> {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+function genSalt(len = 16): string {
+  const bytes = new Uint8Array(len);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function hashSalted(password: string, salt: string): Promise<string> {
+  // simple salted demo hash; NOT production-grade KDF
+  return hashRaw(`${salt}:${password}`);
+}
+
+/** compare entered password with stored user (supports legacy + migrates) */
+async function passwordMatchesAndMaybeMigrate(u: StoredUser, enteredPw: string, usersAll: Record<string, StoredUser>): Promise<boolean> {
+  if (u.salt) {
+    // salted path
+    const expected = await hashSalted(enteredPw, u.salt);
+    return expected === u.passwordHash;
+  } else {
+    // legacy unsalted path
+    const legacy = await hashRaw(enteredPw);
+    const ok = legacy === u.passwordHash;
+    if (ok) {
+      // migrate to salted transparently
+      const salt = genSalt();
+      u.passwordHash = await hashSalted(enteredPw, salt);
+      u.salt = salt;
+      u.algo = "s256";
+      writeUsers(usersAll);
+    }
+    return ok;
+  }
+}
+
+// --------------------------------- session ----------------------------------
+
+function getSessionEmailRaw(): string | null {
+  if (!isBrowser()) return null;
+  return localStorage.getItem(SESSION_KEY);
+}
+export function isSignedIn() {
+  return !!getSessionEmailRaw();
+}
 export function getUser(): User | null {
   if (!isBrowser()) return null;
   migrateLegacyIfNeeded();
-  const email = localStorage.getItem(SESSION_KEY);
+  const email = getSessionEmailRaw();
   if (!email) return null;
   const u = readUsers()[email];
   return u ? pub(u) : null;
 }
 
+// ---------------------------------- signup ----------------------------------
+
 export async function signup(p: {
   name: string;
   email: string;
   password: string;
-  role?: string;                 // optional
+  role?: string; // optional
 }): Promise<User> {
   assertBrowser();
-  const email = p.email.trim().toLowerCase();
-  if (!email.includes("@")) throw { message: "Please enter a valid email" };
+  const email = normalizeEmail(p.email);
+  if (!isValidEmail(email)) throw err("Please enter a valid email", "INVALID_EMAIL");
 
   const users = readUsers();
-  if (users[email]) throw { message: "Email is already registered" };
+  if (users[email]) throw err("Email is already registered", "USER_EXISTS");
 
+  const salt = genSalt();
   const stored: StoredUser = {
     id: crypto.randomUUID(),
-    name: p.name.trim() || email.split("@")[0],
+    name: (p.name || "").trim() || email.split("@")[0],
     email,
     role: p.role?.trim() || undefined,
-    passwordHash: await hash(p.password),
+    passwordHash: await hashSalted(p.password, salt),
     createdAt: Date.now(),
+    salt,
+    algo: "s256",
   };
 
   users[email] = stored;
@@ -110,20 +217,24 @@ export async function signup(p: {
   return pub(stored);
 }
 
-export async function login(p: {
-  email: string;
-  password: string;
-}): Promise<User> {
+// ----------------------------------- login ----------------------------------
+
+export async function login(p: { email: string; password: string }): Promise<User> {
   assertBrowser();
-  const email = p.email.trim().toLowerCase();
+  const email = normalizeEmail(p.email);
   const users = readUsers();
   const u = users[email];
-  if (!u) throw { message: "No account found. Please sign up first." };
-  if (u.passwordHash !== (await hash(p.password))) throw { message: "Invalid email or password." };
+  if (!u) throw err("No account found. Please sign up first.", "NO_ACCOUNT");
+
+  const ok = await passwordMatchesAndMaybeMigrate(u, p.password, users);
+  if (!ok) throw err("Invalid email or password.", "BAD_CREDENTIALS");
+
   localStorage.setItem(SESSION_KEY, email);
   emit();
   return pub(u);
 }
+
+// ---------------------------------- logout ----------------------------------
 
 export function logout() {
   if (!isBrowser()) return;
@@ -131,10 +242,11 @@ export function logout() {
   emit();
 }
 
-// --- Profile updates (non-password) ---
+// ------------------------------ profile edits -------------------------------
+
 export function updateProfile(partial: Partial<Pick<User, "name" | "role">>) {
   assertBrowser();
-  const email = localStorage.getItem(SESSION_KEY);
+  const email = getSessionEmailRaw();
   if (!email) return;
   const users = readUsers();
   const u = users[email];
@@ -143,3 +255,96 @@ export function updateProfile(partial: Partial<Pick<User, "name" | "role">>) {
   writeUsers(users);
   emit();
 }
+
+// ------------------------------ password flows ------------------------------
+
+/**
+ * For the reset-password flow.
+ * Called after your backend verifies the token and returns the email.
+ * Creates a shell user if missing (so reset works even if the account
+ * was created via Google first and later wants a local password).
+ */
+export async function updatePasswordLocal(emailRaw: string, newPassword: string) {
+  assertBrowser();
+  const email = normalizeEmail(emailRaw);
+  const users = readUsers();
+  const existing = users[email];
+  const salt = genSalt();
+
+  if (!existing) {
+    users[email] = {
+      id: crypto.randomUUID(),
+      name: email.split("@")[0],
+      email,
+      role: undefined,
+      passwordHash: await hashSalted(newPassword, salt),
+      createdAt: Date.now(),
+      salt,
+      algo: "s256",
+    };
+  } else {
+    // migrate to salted if needed
+    const s = existing.salt || salt;
+    users[email] = {
+      ...existing,
+      salt: s,
+      algo: "s256",
+      passwordHash: await hashSalted(newPassword, s),
+    };
+  }
+
+  writeUsers(users);
+
+  // keep the user logged in if they are the current session
+  if (getSessionEmailRaw() === email) emit();
+}
+
+/**
+ * For a signed-in user changing password from Settings.
+ * Verifies current password before writing the new one.
+ */
+export async function changePassword(currentPassword: string, newPassword: string) {
+  assertBrowser();
+  const email = getSessionEmailRaw();
+  if (!email) throw err("Not signed in.", "NOT_SIGNED_IN");
+
+  const users = readUsers();
+  const u = users[email];
+  if (!u) throw err("No account found.", "NO_ACCOUNT");
+
+  // Verify current password
+  const ok = await passwordMatchesAndMaybeMigrate(u, currentPassword, users);
+  if (!ok) throw err("Current password is incorrect.", "BAD_CREDENTIALS");
+
+  // Set new salted password
+  const salt = u.salt || genSalt();
+  u.salt = salt;
+  u.algo = "s256";
+  u.passwordHash = await hashSalted(newPassword, salt);
+  writeUsers(users);
+  emit();
+}
+
+// ---------------------------- (optional) helpers ----------------------------
+
+/** get raw stored user (dev/debug) */
+export function __getStoredUser(emailRaw: string): StoredUser | undefined {
+  const email = normalizeEmail(emailRaw);
+  return readUsers()[email];
+}
+
+/** remove a user entirely (dev/debug) */
+export function __deleteUser(emailRaw: string) {
+  assertBrowser();
+  const email = normalizeEmail(emailRaw);
+  const users = readUsers();
+  if (users[email]) {
+    delete users[email];
+    writeUsers(users);
+    if (getSessionEmailRaw() === email) logout();
+    emit();
+  }
+}
+
+/** alias to keep earlier examples working */
+export const resetPasswordByEmail = updatePasswordLocal;
