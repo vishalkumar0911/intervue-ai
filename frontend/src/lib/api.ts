@@ -189,6 +189,15 @@ async function getCachedRoles(): Promise<string[]> {
 
 /* ---------------- API ---------------- */
 
+// Extra types for new endpoints
+export type AdminUser = {
+  id: string;
+  name: string;
+  email: string;
+  role?: string | null;
+  createdAt?: number;
+};
+
 export const api = {
   /* health & stats */
   health: () => request<Health>(p("/health")),
@@ -267,5 +276,50 @@ export const api = {
     a.click();
     a.remove();
     URL.revokeObjectURL(objectUrl);
+  },
+
+  /* -------- NEW: auth helpers (proxy-backed) -------- */
+  auth: {
+    /** Set or change the current user's role via Next.js proxy → FastAPI */
+    setRole: (role: string) =>
+      request<{ ok: boolean; role: string; id: string }>(p("/auth/role"), {
+        method: "POST",
+        body: { role },
+      }),
+  },
+
+  /* -------- NEW: Admin endpoints -------- */
+  admin: {
+    listUsers: () => request<AdminUser[]>(p("/admin/users")),
+    updateUserRole: (id: string, role: string | null) =>
+      request<AdminUser>(p("/admin/users"), {
+        method: "PATCH",
+        body: { id, role },
+      }),
+  },
+
+  /* -------- NEW: Trainer endpoints -------- */
+  trainer: {
+    listQuestions: (params?: { role?: string; topic?: string; difficulty?: "easy" | "medium" | "hard" }) =>
+      request<Question[]>(p("/trainer/questions"), {
+        query: {
+          role: params?.role,
+          topic: params?.topic,
+          difficulty: params?.difficulty,
+        } as any,
+      }),
+
+    createQuestion: (q: {
+      role: string;
+      text: string;
+      topic?: string | null;
+      difficulty?: "easy" | "medium" | "hard" | null;
+    }) => request<Question>(p("/trainer/questions"), { method: "POST", body: q }),
+
+    updateQuestion: (id: string, patch: Partial<Pick<Question, "text" | "topic" | "difficulty" | "role">>) =>
+      request<Question>(p(`/trainer/questions/${id}`), { method: "PATCH", body: patch }),
+
+    deleteQuestion: (id: string) =>
+      request<{ ok: boolean; id: string }>(p(`/trainer/questions/${id}`), { method: "DELETE" }),
   },
 };

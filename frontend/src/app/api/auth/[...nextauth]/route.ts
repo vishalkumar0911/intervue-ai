@@ -14,31 +14,28 @@ async function getAppJwtFromFastAPI(email: string, name?: string, sub?: string) 
   });
 
   if (!res.ok) {
-    // Add context to the error so debugging is easy in dev
     const text = await res.text().catch(() => "");
     throw new Error(`FastAPI oauth/google failed (${res.status}) ${text}`);
   }
-  return res.json() as Promise<{ id: string; appJwt: string }>;
+  // ⬇️ allow backend to return role if it has one
+  return res.json() as Promise<{ id: string; appJwt: string; role?: string | null }>;
 }
 
 export const authOptions: NextAuthOptions = {
-  debug: true,                       // log detailed info in dev
-  pages: { signIn: "/login" },       // use your custom login page
+  debug: true,
+  pages: { signIn: "/login" },
   session: { strategy: "jwt" },
 
   providers: [
     Google({
       clientId: process.env.GOOGLE_CLIENT_ID!,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-      // In dev, allow linking a Google account to an existing email/password user.
-      // Remove this in prod and implement a stricter signIn callback instead.
       allowDangerousEmailAccountLinking: true,
-      authorization: { params: { prompt: "consent select_account" } }, // force chooser & consent each time
+      authorization: { params: { prompt: "consent select_account" } },
     }),
   ],
 
   callbacks: {
-    /** Attach your app JWT (from FastAPI) onto the NextAuth token after Google login. */
     async jwt({ token, account, profile }) {
       if (account?.provider === "google" && profile?.email) {
         try {
@@ -49,23 +46,27 @@ export const authOptions: NextAuthOptions = {
           );
           (token as any).appJwt = data.appJwt;
           (token as any).uid = data.id;
+          if (data.role) (token as any).role = data.role; // ⬅️ carry role if backend has it
         } catch (err) {
-          // Don’t block Google login if FastAPI is down; your proxy will just omit Authorization.
           console.error("[oauth/google] upsert failed:", err);
         }
       }
       return token;
     },
 
-    /** Expose uid/appJwt on the session so server code (proxy) can read it. */
     async session({ session, token }) {
       (session as any).uid = (token as any).uid;
       (session as any).appJwt = (token as any).appJwt;
+      // expose role on session + session.user for convenience
+      const role = (token as any).role;
+      if (role) {
+        (session as any).role = role;
+        if (session.user) (session.user as any).role = role;
+      }
       return session;
     },
   },
 
-  // Optional extra logging hooks
   logger: {
     error(code, ...msg) { console.error("NextAuth error:", code, ...msg); },
     warn(code, ...msg)  { console.warn("NextAuth warn:", code, ...msg); },

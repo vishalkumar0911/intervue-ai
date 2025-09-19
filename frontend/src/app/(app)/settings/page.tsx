@@ -9,6 +9,7 @@ import { useAuth } from "@/components/auth/AuthProvider";
 import { updateProfile } from "@/lib/auth";
 import { Card } from "@/components/Card";
 import { Button } from "@/components/ui/Button";
+import RequireRole from "@/components/auth/RequireRole";
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -63,6 +64,7 @@ export default function SettingsPage() {
   }
 
   return (
+    <RequireRole roles={["Student", "Trainer", "Admin"]}>
     <div className="max-w-2xl space-y-6">
       <h1 className="text-2xl font-semibold">Settings</h1>
 
@@ -127,5 +129,6 @@ export default function SettingsPage() {
         </form>
       </Card>
     </div>
+    </RequireRole>
   );
 }

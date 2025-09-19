@@ -1,3 +1,4 @@
+// frontend/src/components/shell/Sidebar.tsx
 "use client";
 
 import React, { createContext, useContext, useEffect, useState } from "react";
@@ -14,7 +15,12 @@ import {
   ChevronLeft,
   ChevronRight,
   X,
+  Users,        // ✅ NEW: import
+  Shield,       // ✅ NEW: import
 } from "lucide-react";
+
+import { useAuth } from "@/components/auth/AuthProvider";
+import { hasAnyRole } from "@/lib/rbac";
 
 /* ----------------------------- context & hook ----------------------------- */
 
@@ -85,22 +91,35 @@ export function SidebarTrigger() {
 /* --------------------------------- content -------------------------------- */
 
 type IconType = React.ComponentType<{ className?: string; size?: number | string }>;
-type Item = { href: string; label: string; icon: IconType };
+type Item = {
+  href: string;
+  label: string;
+  icon: IconType;
+  /** When provided, item is visible only if user has ANY of these roles. */
+  roles?: string[];
+};
 
+// roles: omit/empty => visible to all
 const NAV: Item[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/interview", label: "Interview", icon: Mic },
-  { href: "/analytics", label: "Analytics", icon: BarChart2 },
-  { href: "/bookmarks", label: "Bookmarks", icon: Bookmark },
-  { href: "/settings", label: "Settings", icon: SettingsIcon },
+  { href: "/interview", label: "Interview", icon: Mic, roles: ["Student"] },
+  { href: "/analytics", label: "Analytics", icon: BarChart2, roles: ["Student","Trainer", "Admin"] },
+  { href: "/bookmarks", label: "Bookmarks", icon: Bookmark, roles: ["Student"] },
+  { href: "/settings", label: "Settings", icon: SettingsIcon, },
+  { href: "/trainer", label: "Trainer", icon: Users, roles: ["Trainer", "Admin"] }, // ✅ role-gated
+  { href: "/admin", label: "Admin", icon: Shield, roles: ["Admin"] },               // ✅ role-gated
 ];
 
 function NavList({ collapsed }: { collapsed: boolean }) {
   const pathname = usePathname();
+  const { user } = useAuth();
+
+  // Filter by roles (if roles not set => visible to all)
+  const visible = NAV.filter((item) => !item.roles || hasAnyRole(user, item.roles));
 
   return (
     <ul className="mt-1 space-y-1" role="list">
-      {NAV.map(({ href, label, icon: Icon }) => {
+      {visible.map(({ href, label, icon: Icon }) => {
         const active = pathname === href || (href !== "/" && pathname.startsWith(href + "/"));
         return (
           <li key={href}>

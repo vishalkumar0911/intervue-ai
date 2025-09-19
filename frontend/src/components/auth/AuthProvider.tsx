@@ -1,9 +1,10 @@
+// src/components/auth/AuthProvider.tsx
 "use client";
 
 import React, { createContext, useContext, useEffect, useState } from "react";
 import type { User } from "@/lib/auth";
 import * as auth from "@/lib/auth";
-import { useSession, signOut } from "next-auth/react";   // ← NEW
+import { useSession, signOut, getSession } from "next-auth/react";
 
 type AuthCtx = {
   user: User | null;
@@ -11,35 +12,50 @@ type AuthCtx = {
   login: (email: string, password: string) => Promise<void>;
   signup: (name: string, email: string, password: string, role?: string) => Promise<void>;
   logout: () => void;
-  refresh: () => void;
+  refresh: () => void | Promise<void>;
 };
 
 const Ctx = createContext<AuthCtx | null>(null);
+
+function normRole(s?: string | null) {
+  return (s || "").trim();
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const { data: session, status } = useSession(); // ← NEW
+  const { data: session, status } = useSession();
 
-  const refreshLocal = () => setUser(auth.getUser());
+  // Build a user object from a NextAuth session, honoring local override if present
+  const userFromSession = (s: any): User | null => {
+    if (!s?.user?.email) return null;
+    let role =
+      (typeof window !== "undefined" && localStorage.getItem("auth:role-override")) ||
+      (s.user as any).role ||
+      (s as any).role ||
+      undefined;
+
+    role = normRole(role);
+    return {
+      id: (s as any).uid || s.user.email,
+      name: s.user.name || s.user.email.split("@")[0],
+      email: s.user.email,
+      role: role || undefined,
+    };
+  };
 
   useEffect(() => {
-    // Prefer NextAuth session (Google). Fallback to local auth.
     if (status === "loading") return;
 
     if (session?.user?.email) {
-      setUser({
-        id: session.user.email,
-        name: session.user.name || session.user.email.split("@")[0],
-        email: session.user.email,
-      });
+      setUser(userFromSession(session));
       setLoading(false);
       return;
     }
 
     // fallback: local auth (email/password)
-    refreshLocal();
+    setUser(auth.getUser());
     setLoading(false);
   }, [session, status]);
 
@@ -54,14 +70,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   function doLogout() {
-    // sign out both worlds
     auth.logout();
-    void signOut({ callbackUrl: "/login" }); // NextAuth
+    void signOut({ callbackUrl: "/login" });
     setUser(null);
   }
 
+  async function refresh() {
+    // Re-read current session (includes role set via /api/auth/role) + local override.
+    const s = await getSession();
+    if (s?.user?.email) {
+      setUser(userFromSession(s));
+    } else {
+      setUser(auth.getUser());
+    }
+  }
+
   return (
-    <Ctx.Provider value={{ user, loading, login: doLogin, signup: doSignup, logout: doLogout, refresh: refreshLocal }}>
+    <Ctx.Provider value={{ user, loading, login: doLogin, signup: doSignup, logout: doLogout, refresh }}>
       {children}
     </Ctx.Provider>
   );

@@ -34,6 +34,10 @@ from pydantic import ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from starlette.middleware.gzip import GZipMiddleware
 
+# NEW: import extra routers (files you added)
+from app.routes_admin import router as admin_router
+from app.routes_trainer import router as trainer_router
+
 # -------------------- Settings --------------------
 class Settings(BaseSettings):
     """Typed env with sane defaults. Extra keys are ignored (no crashes)."""
@@ -625,12 +629,18 @@ def stats():
         "attempts_by_difficulty": dict(by_diff),
     }
 
-# -------------------- Auth / Password routers (guarded) --------------------
-from app.routers import password, auth
+# -------------------- Auth / Password routers (existing) --------------------
+from app.routers import password
+from app.routers.auth import router as oauth_router
 
 # Guard these with API key + mutate limiter
-app.include_router(password.router, dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)])
-app.include_router(auth.router,      dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)])
+app.include_router(password.router,    dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)])
+app.include_router(oauth_router,       dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)])
+
+# -------------------- Role/OAuth + Admin + Trainer routers (NEW) ------------
+# Protect them in the same way (API key + mutate limiter)
+app.include_router(admin_router,   dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)])
+app.include_router(trainer_router, dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)])
 
 # -------------------- Developer utilities --------------------
 @app.post(
