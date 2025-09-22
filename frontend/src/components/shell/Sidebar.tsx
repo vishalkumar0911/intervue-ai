@@ -107,7 +107,7 @@ const NAV: Item[] = [
   { href: "/bookmarks", label: "Bookmarks", icon: Bookmark, roles: ["Student"] },
   { href: "/settings", label: "Settings", icon: SettingsIcon, },
   { href: "/trainer", label: "Trainer", icon: Users, roles: ["Trainer", "Admin"] }, // ✅ role-gated
-  { href: "/admin", label: "Admin", icon: Shield, roles: ["Admin"] },               // ✅ role-gated
+  { href: "/admin/users", label: "Admin", icon: Shield, roles: ["Admin"] },               // ✅ role-gated
 ];
 
 function NavList({ collapsed }: { collapsed: boolean }) {
