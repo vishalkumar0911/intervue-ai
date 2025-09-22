@@ -5,7 +5,7 @@ import { twMerge } from "tailwind-merge";
 import { Loader2 } from "lucide-react";
 
 type Variant = "primary" | "secondary" | "ghost" | "outline" | "destructive";
-type Size = "sm" | "md" | "lg";
+type Size = "sm" | "md" | "lg" | "icon";
 
 const base =
   "inline-flex items-center justify-center gap-2 rounded-xl font-medium transition-colors focus-ring disabled:opacity-50 disabled:pointer-events-none select-none";
@@ -22,6 +22,7 @@ const sizes: Record<Size, string> = {
   sm: "h-9 px-3 text-sm",
   md: "h-10 px-4 text-sm",
   lg: "h-12 px-5 text-base",
+  icon: "h-9 w-9", // 👈 square button for icons
 };
 
 type Props = ButtonHTMLAttributes<HTMLButtonElement> & {

@@ -27,14 +27,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const { data: session, status } = useSession();
 
-  // Build a user object from a NextAuth session, honoring local override if present
+  
   const userFromSession = (s: any): User | null => {
     if (!s?.user?.email) return null;
     let role =
-      (typeof window !== "undefined" && localStorage.getItem("auth:role-override")) ||
       (s.user as any).role ||
       (s as any).role ||
       undefined;
+
 
     role = normRole(role);
     return {
@@ -71,6 +71,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   function doLogout() {
     auth.logout();
+    try { localStorage.removeItem("auth:role-override"); } catch {}
     void signOut({ callbackUrl: "/login" });
     setUser(null);
   }

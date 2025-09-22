@@ -8,6 +8,10 @@ export type Question = {
   text: string;
   topic?: string | null;
   difficulty?: "easy" | "medium" | "hard" | null;
+
+  // optional metadata used by Trainer UI / backend merge
+  source?: "core" | "trainer";
+  readonly?: boolean | null;
 };
 
 export type Attempt = {
@@ -57,32 +61,21 @@ type QuestionsParams = {
 
 /* ---------------- Base + mode detection ---------------- */
 
-/**
- * Two modes:
- * 1) Direct mode (default when FASTAPI_URL / NEXT_PUBLIC_API_BASE_URL is set):
- *    -> Hit FastAPI directly and attach x-api-key for mutating endpoints.
- * 2) Proxy mode (no FASTAPI/NEXT_PUBLIC base provided OR NEXT_PUBLIC_USE_NEXT_PROXY=true):
- *    -> Call same-origin Next.js routes under /api/* (no browser key).
- */
 const DIRECT_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   process.env.FASTAPI_URL ||
-  ""; // empty => proxy mode unless forced
+  "";
 
 const FORCE_PROXY = process.env.NEXT_PUBLIC_USE_NEXT_PROXY === "true";
-const USE_PROXY = FORCE_PROXY || !DIRECT_BASE; // true => use /api/* routes
+const USE_PROXY = FORCE_PROXY || !DIRECT_BASE;
 
 const API_BASE = USE_PROXY ? "" : DIRECT_BASE.replace(/\/+$/, "");
 const API_KEY =
   process.env.NEXT_PUBLIC_API_KEY || process.env.FASTAPI_API_KEY || "";
 
-// Prefix helper: adds /api in proxy mode, otherwise returns path unchanged
 const p = (path: string) => (USE_PROXY ? `/api${path}` : path);
-
-// In direct mode we must attach the key for mutating calls
 const SHOULD_ATTACH_KEY = !USE_PROXY && !!API_KEY;
 
-// Global defaults
 const DEFAULT_TIMEOUT = 12_000;
 const DEFAULT_RETRY = 1;
 
@@ -93,27 +86,34 @@ function qs(params: Record<string, string | undefined>) {
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== "") u.set(k, v);
   }
-  const s = u.toString();
-  return s ? `?${s}` : "";
+  return u.toString() ? `?${u.toString()}` : "";
 }
 
-function fetchWithTimeout(url: string, opts: RequestInit = {}, timeoutMs = DEFAULT_TIMEOUT) {
+function fetchWithTimeout(
+  url: string,
+  opts: RequestInit = {},
+  timeoutMs = DEFAULT_TIMEOUT
+) {
   const ctrl = new AbortController();
   const id = setTimeout(() => ctrl.abort(), timeoutMs);
-  return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(id));
+  return fetch(url, { ...opts, signal: ctrl.signal }).finally(() =>
+    clearTimeout(id)
+  );
 }
 
 async function toError(res: Response): Promise<Error> {
   let msg = `Request failed: ${res.status}`;
   try {
     const text = await res.text();
-    try {
-      const j = JSON.parse(text);
-      if (j?.detail) msg = Array.isArray(j.detail) ? j.detail[0]?.msg || msg : j.detail;
-      else if (j?.error) msg = j.error || msg;
-      else msg = text || msg;
-    } catch {
-      msg = text || msg;
+    if (text) {
+      try {
+        const j = JSON.parse(text);
+        if (j?.detail) msg = Array.isArray(j.detail) ? j.detail[0]?.msg || msg : j.detail;
+        else if (j?.error) msg = j.error || msg;
+        else msg = text;
+      } catch {
+        msg = text;
+      }
     }
   } catch {}
   return new Error(msg);
@@ -129,9 +129,9 @@ async function request<T>(
     timeout = DEFAULT_TIMEOUT,
     retry = method === "GET" ? DEFAULT_RETRY : 0,
     cache = "no-store" as RequestCache,
-    auth = false, // if true, attach x-api-key (only in direct mode)
+    auth = false,
   }: {
-    method?: "GET" | "POST" | "PATCH" | "DELETE";
+    method?: "GET" | "POST" | "PATCH" | "DELETE" | "HEAD";
     query?: Record<string, string | undefined>;
     body?: any;
     headers?: Record<string, string>;
@@ -139,7 +139,7 @@ async function request<T>(
     retry?: number;
     cache?: RequestCache;
     auth?: boolean;
-  } = {},
+  } = {}
 ): Promise<T> {
   const urlStr = `${API_BASE}${path}${query ? qs(query) : ""}`;
 
@@ -153,7 +153,7 @@ async function request<T>(
   };
 
   if (body !== undefined) {
-    init.headers = { "Content-Type": "application/json", ...(init.headers || {}) };
+    (init.headers as Record<string, string>)["content-type"] = "application/json";
     init.body = JSON.stringify(body);
   }
 
@@ -164,8 +164,14 @@ async function request<T>(
     if (res.ok) {
       const ct = res.headers.get("content-type") || "";
       if (ct.includes("application/json")) return (await res.json()) as T;
-      // callers of request<T> expect JSON
-      return (await res.json()) as T;
+
+      // fallback: try to parse text into JSON
+      const txt = await res.text();
+      try {
+        return JSON.parse(txt) as T;
+      } catch {
+        throw new Error(`Unexpected non-JSON response: ${txt}`);
+      }
     }
     if (attempt <= retry && (res.status >= 500 || res.status === 0)) {
       await new Promise((r) => setTimeout(r, 200 * attempt));
@@ -176,6 +182,7 @@ async function request<T>(
 }
 
 /* ---------------- Small roles cache ---------------- */
+
 let rolesCache: { data: string[]; ts: number } | null = null;
 const ROLES_TTL = 5 * 60_000;
 
@@ -187,9 +194,15 @@ async function getCachedRoles(): Promise<string[]> {
   return data;
 }
 
+// force refresh (bypass cache)
+async function getRolesFresh(): Promise<string[]> {
+  const data = await request<string[]>(p("/roles"));
+  rolesCache = { data, ts: Date.now() };
+  return data;
+}
+
 /* ---------------- API ---------------- */
 
-// Extra types for new endpoints
 export type AdminUser = {
   id: string;
   name: string;
@@ -205,6 +218,7 @@ export const api = {
 
   /* roles & questions */
   roles: () => getCachedRoles(),
+  rolesFresh: () => getRolesFresh(),
 
   questions: ({ role, limit = 20, offset = 0, difficulty, shuffle, seed }: QuestionsParams) =>
     request<Question[]>(p("/questions"), {
@@ -245,7 +259,7 @@ export const api = {
     request<Attempt>(p("/attempts"), {
       method: "POST",
       body: a,
-      auth: true, // attach x-api-key only in direct mode
+      auth: true,
     }),
 
   updateAttempt: (id: string, patch: AttemptUpdate) =>
@@ -278,9 +292,8 @@ export const api = {
     URL.revokeObjectURL(objectUrl);
   },
 
-  /* -------- NEW: auth helpers (proxy-backed) -------- */
+  /* auth helpers */
   auth: {
-    /** Set or change the current user's role via Next.js proxy → FastAPI */
     setRole: (role: string) =>
       request<{ ok: boolean; role: string; id: string }>(p("/auth/role"), {
         method: "POST",
@@ -288,38 +301,48 @@ export const api = {
       }),
   },
 
-  /* -------- NEW: Admin endpoints -------- */
+  /* Admin endpoints */
   admin: {
     listUsers: () => request<AdminUser[]>(p("/admin/users")),
-    updateUserRole: (id: string, role: string | null) =>
+    updateUserRole: (id: string, role: "Student" | "Trainer" | "Admin" | null) =>
       request<AdminUser>(p("/admin/users"), {
         method: "PATCH",
         body: { id, role },
       }),
   },
 
-  /* -------- NEW: Trainer endpoints -------- */
+  /* Trainer endpoints */
   trainer: {
-    listQuestions: (params?: { role?: string; topic?: string; difficulty?: "easy" | "medium" | "hard" }) =>
+    listQuestions: (params?: {
+      role?: string;
+      topic?: string;
+      difficulty?: "easy" | "medium" | "hard" | null;
+      include_core?: boolean;
+    }) =>
       request<Question[]>(p("/trainer/questions"), {
         query: {
-          role: params?.role,
-          topic: params?.topic,
-          difficulty: params?.difficulty,
-        } as any,
+          role: params?.role || undefined,
+          topic: params?.topic || undefined,
+          difficulty: params?.difficulty ?? undefined, // null => omit
+          include_core: params?.include_core ? "true" : undefined,
+        },
       }),
 
-    createQuestion: (q: {
-      role: string;
-      text: string;
-      topic?: string | null;
-      difficulty?: "easy" | "medium" | "hard" | null;
-    }) => request<Question>(p("/trainer/questions"), { method: "POST", body: q }),
+    createQuestion: (q: Pick<Question, "role" | "text"> & Partial<Question>) =>
+      request<Question>(p("/trainer/questions"), { method: "POST", body: q }),
 
-    updateQuestion: (id: string, patch: Partial<Pick<Question, "text" | "topic" | "difficulty" | "role">>) =>
-      request<Question>(p(`/trainer/questions/${id}`), { method: "PATCH", body: patch }),
+    updateQuestion: (
+      id: string,
+      patch: Partial<Pick<Question, "text" | "topic" | "difficulty" | "role">>
+    ) =>
+      request<Question>(p(`/trainer/questions/${id}`), {
+        method: "PATCH",
+        body: patch,
+      }),
 
     deleteQuestion: (id: string) =>
-      request<{ ok: boolean; id: string }>(p(`/trainer/questions/${id}`), { method: "DELETE" }),
+      request<{ ok: boolean; id: string }>(p(`/trainer/questions/${id}`), {
+        method: "DELETE",
+      }),
   },
 };

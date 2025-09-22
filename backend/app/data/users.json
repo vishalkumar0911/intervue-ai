@@ -3,7 +3,7 @@
     "id": "104021921506679217939",
     "email": "pankajkrg2016@gmail.com",
     "name": "Pankaj Kumar Gupta",
-    "role": "Student",
+    "role": "Admin",
     "provider": "google",
     "createdAt": 1758238653
   },
@@ -11,8 +11,16 @@
     "id": "102455925389132325188",
     "email": "pankajkrg93@gmail.com",
     "name": "Pankaj kumar Gupta",
-    "role": null,
+    "role": "Student",
     "provider": "google",
     "createdAt": 1758238924
+  },
+  "trainer@example.com": {
+    "id": "sub123",
+    "email": "trainer@example.com",
+    "name": "Trainer T",
+    "role": "Trainer",
+    "provider": "google",
+    "createdAt": 1758256225
   }
 }

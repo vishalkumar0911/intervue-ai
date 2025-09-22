@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef } from "react";
 import Sidebar, { SidebarTrigger, useSidebar } from "@/components/shell/Sidebar";
+import { SidebarProvider } from "@/components/shell/Sidebar";
 
 /**
  * A small skip link for keyboard users.
@@ -36,6 +37,7 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
   const overlayRef = useRef<HTMLDivElement>(null);
 
   return (
+    <SidebarProvider>
     <div
       className="relative mx-auto max-w-7xl gap-4 px-4 py-4 md:grid md:min-h-[calc(100dvh-3.5rem)] md:grid-cols-[var(--sb)_1fr]"
       style={style}
@@ -80,6 +82,7 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
         </main>
       </div>
     </div>
+    </SidebarProvider>
   );
 }
 
