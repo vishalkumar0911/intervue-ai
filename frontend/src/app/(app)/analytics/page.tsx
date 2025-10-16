@@ -340,7 +340,7 @@ export default function AnalyticsPage() {
   /* --------------------------------- render -------------------------------- */
 
   return (
-    <RequireRole roles={["Student","Trainer", "Admin"]} mode="inline">
+    <RequireRole roles={["Student","Trainer", "Admin"]} mode="redirect">
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>

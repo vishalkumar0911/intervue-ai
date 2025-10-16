@@ -1,5 +1,6 @@
 // src/lib/api.ts
 
+import { toast } from "sonner";
 /* ---------------- Types ---------------- */
 
 export type Question = {
@@ -48,6 +49,11 @@ export type Health = {
   attempts_file: string;
   last_questions_load_ts: number;
   server_time: number;
+
+  // add these (backend provides them)
+  mode?: "open" | "protected";
+  questions_size?: number;
+  attempts_size?: number;
 };
 
 type QuestionsParams = {
@@ -89,6 +95,16 @@ function qs(params: Record<string, string | undefined>) {
   return u.toString() ? `?${u.toString()}` : "";
 }
 
+function isBrowser() {
+  return typeof window !== "undefined";
+}
+
+function maybeToast(kind: "error" | "warning", message: string, description?: string) {
+  if (!isBrowser()) return;
+  if (kind === "error") toast.error(message, description ? { description } : undefined);
+  else toast(message, description ? { description } : undefined);
+}
+
 function fetchWithTimeout(
   url: string,
   opts: RequestInit = {},
@@ -96,27 +112,80 @@ function fetchWithTimeout(
 ) {
   const ctrl = new AbortController();
   const id = setTimeout(() => ctrl.abort(), timeoutMs);
-  return fetch(url, { ...opts, signal: ctrl.signal }).finally(() =>
-    clearTimeout(id)
-  );
+  const p = fetch(url, { ...opts, signal: ctrl.signal })
+    .catch((e) => {
+      // Network-level errors (DNS, CORS, offline, Abort)
+      const name = (e && (e.name || e.code)) || "";
+      if (name === "AbortError" || name === "TimeoutError") {
+        maybeToast("error", "Request timed out", "Please try again.");
+        const err = new Error("Request timed out");
+        (err as any).code = "TIMEOUT";
+        throw err;
+      }
+      // Other network error
+      maybeToast("error", "Network error", "Check your connection and try again.");
+      const err = new Error("Network error");
+      (err as any).code = "NETWORK";
+      throw err;
+    })
+    .finally(() => clearTimeout(id));
+
+  // ensure we clear the timer on success too
+  return p.finally(() => clearTimeout(id));
 }
 
+
 async function toError(res: Response): Promise<Error> {
-  let msg = `Request failed: ${res.status}`;
+  let detail: string | undefined;
   try {
     const text = await res.text();
     if (text) {
       try {
         const j = JSON.parse(text);
-        if (j?.detail) msg = Array.isArray(j.detail) ? j.detail[0]?.msg || msg : j.detail;
-        else if (j?.error) msg = j.error || msg;
-        else msg = text;
+        detail =
+          (Array.isArray(j?.detail) && j.detail[0]?.msg) ||
+          j?.detail ||
+          j?.error ||
+          j?.message ||
+          text;
       } catch {
-        msg = text;
+        detail = text;
       }
     }
   } catch {}
-  return new Error(msg);
+
+  const status = res.status;
+  const rid = res.headers.get("x-request-id") || "";
+
+  if (status === 429) {
+    maybeToast("error", "Too many requests", rid ? `Request ID: ${rid}` : "Please slow down and try again.");
+  } else if (status === 502 || status === 503 || status === 504) {
+    maybeToast("error", "Backend unavailable", rid ? `Request ID: ${rid}` : "Please try again shortly.");
+  } else if (status === 401) {
+    maybeToast("error", "Unauthorized", "Your session or API key is invalid.");
+  } else if (status === 404) {
+    maybeToast("error", "Not found", "The resource you requested does not exist.");
+  } else if (status === 422) {
+    maybeToast("error", "Validation failed", detail || "Please check your input and try again.");
+  } else if (status >= 500) {
+    maybeToast("error", "Server error", rid ? `Request ID: ${rid}` : "Please try again.");
+  }
+
+  const err = new Error(detail || `Request failed: ${status}`);
+  (err as any).status = status;
+  if (rid) (err as any).requestId = rid;
+  return err;
+}
+
+/** small safe toast helper (avoids SSR issues) */
+function toastSafe(kind: "success" | "error" | "message", text: string) {
+  if (typeof window === "undefined") return;
+  // dynamic import avoids loading sonner in SSR or when not needed
+  import("sonner").then(({ toast }) => {
+    if (kind === "success") toast.success(text);
+    else if (kind === "error") toast.error(text);
+    else toast(text);
+  }).catch(() => {});
 }
 
 async function request<T>(
@@ -161,11 +230,11 @@ async function request<T>(
   while (true) {
     attempt++;
     const res = await fetchWithTimeout(urlStr, init, timeout);
+
+    // 2xx fast path
     if (res.ok) {
       const ct = res.headers.get("content-type") || "";
       if (ct.includes("application/json")) return (await res.json()) as T;
-
-      // fallback: try to parse text into JSON
       const txt = await res.text();
       try {
         return JSON.parse(txt) as T;
@@ -173,10 +242,20 @@ async function request<T>(
         throw new Error(`Unexpected non-JSON response: ${txt}`);
       }
     }
+
+    // Friendly messages for common transient states
+    if (res.status === 429) {
+      toastSafe("error", "Too many requests — please slow down.");
+    } else if (res.status === 502 || res.status === 503 || res.status === 504) {
+      toastSafe("error", "Backend unavailable — try again in a moment.");
+    }
+
+    // retry only idempotent-ish GETs on 5xx or network abort
     if (attempt <= retry && (res.status >= 500 || res.status === 0)) {
       await new Promise((r) => setTimeout(r, 200 * attempt));
       continue;
     }
+
     throw await toError(res);
   }
 }

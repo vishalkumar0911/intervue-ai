@@ -1,5 +1,6 @@
 # backend/app/routes_trainer.py
 from __future__ import annotations
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, List, Literal, Dict, Any, Tuple
@@ -8,19 +9,37 @@ import uuid, json, tempfile, os
 
 from .deps import require_trainer
 
+# ---------------------------------------------------------------------
+# Read QUESTIONS_FILE from env (same behavior as app.main)
+# ---------------------------------------------------------------------
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+class _Settings(BaseSettings):
+    QUESTIONS_FILE: str = ""  # optional override
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
+
+_settings = _Settings()
+
+def _default_questions_path() -> Path:
+    # backend/app/routes_trainer.py -> backend/
+    return Path(__file__).resolve().parents[1] / "data" / "questions.json"
+
+def _questions_path() -> Path:
+    # If env provided, use that; otherwise use the default
+    raw = (_settings.QUESTIONS_FILE or "").strip()
+    return (Path(raw).resolve() if raw else _default_questions_path()).resolve()
+
+
 router = APIRouter(prefix="/trainer", tags=["trainer"])
-
-# ✅ canonical path: backend/data/questions.json
-QUESTIONS_FILE = Path(__file__).resolve().parents[1] / "data" / "questions.json"
-
 
 # ----------------------- file i/o helpers (grouped by role) -----------------------
 
 def _ensure_file():
-    QUESTIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    if not QUESTIONS_FILE.exists():
+    p = _questions_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if not p.exists():
         # start with empty grouped object, not a list
-        QUESTIONS_FILE.write_text("{}", encoding="utf-8")
+        p.write_text("{}", encoding="utf-8")
 
 def _normalize_item(it: dict) -> dict:
     """Ensure id, role, and default legacy fields."""
@@ -38,8 +57,9 @@ def _normalize_item(it: dict) -> dict:
 def _load_map() -> Dict[str, List[Dict[str, Any]]]:
     """Load as { role: [ {q}, ... ] } no matter how file is currently shaped."""
     _ensure_file()
+    p = _questions_path()
     try:
-        raw = json.loads(QUESTIONS_FILE.read_text(encoding="utf-8"))
+        raw = json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return {}
 
@@ -71,13 +91,14 @@ def _load_map() -> Dict[str, List[Dict[str, Any]]]:
 
 def _atomic_write_map(d: Dict[str, List[Dict[str, Any]]]):
     # keep same grouped-by-role structure on disk
+    p = _questions_path()
     tmp = tempfile.NamedTemporaryFile(
-        "w", delete=False, encoding="utf-8", dir=str(QUESTIONS_FILE.parent)
+        "w", delete=False, encoding="utf-8", dir=str(p.parent)
     )
     try:
         json.dump(d, tmp, ensure_ascii=False, indent=2)
         tmp.flush(); os.fsync(tmp.fileno()); tmp.close()
-        os.replace(tmp.name, QUESTIONS_FILE)
+        os.replace(tmp.name, p)
     except Exception:
         try: os.unlink(tmp.name)
         except Exception: pass
@@ -87,7 +108,6 @@ def _flatten(d: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for role, arr in d.items():
         for it in arr:
-            # ensure role tag matches bucket
             q = dict(it)
             q["role"] = role
             out.append(q)

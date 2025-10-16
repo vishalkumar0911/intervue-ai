@@ -1,13 +1,11 @@
+// frontend/src/app/(app)/layout.tsx
 "use client";
 
 import React, { useEffect, useRef } from "react";
-import Sidebar, { SidebarTrigger, useSidebar } from "@/components/shell/Sidebar";
-import { SidebarProvider } from "@/components/shell/Sidebar";
+import type { ReactNode } from "react";
+import Sidebar, { SidebarTrigger, useSidebar, SidebarProvider } from "@/components/shell/Sidebar";
 
-/**
- * A small skip link for keyboard users.
- * It appears when focused and jumps to the main content.
- */
+/** Keyboard skip link */
 function SkipToContent() {
   return (
     <a
@@ -21,11 +19,8 @@ function SkipToContent() {
 
 function LayoutInner({ children }: { children: React.ReactNode }) {
   const { collapsed, open, setOpen } = useSidebar();
+  const style = { ["--sb" as any]: collapsed ? "72px" : "264px" } as React.CSSProperties;
 
-  // keep CSS variable in sync with collapsed state
-  const style = { ["--sb" as any]: collapsed ? "72px" : "260px" };
-
-  // Close drawer on Escape key when in mobile open state
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape" && open) setOpen(false);
@@ -37,24 +32,18 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
   const overlayRef = useRef<HTMLDivElement>(null);
 
   return (
-    <SidebarProvider>
     <div
-      className="relative mx-auto max-w-7xl gap-4 px-4 py-4 md:grid md:min-h-[calc(100dvh-3.5rem)] md:grid-cols-[var(--sb)_1fr]"
+      className="relative w-full gap-4 px-4 py-4 md:grid md:min-h-[calc(100dvh-3.5rem)] md:grid-cols-[var(--sb)_1fr]"
       style={style}
     >
-      {/* Skip link for accessibility */}
       <SkipToContent />
 
-      {/* Sidebar region */}
-      <aside
-        role="complementary"
-        aria-label="Primary navigation"
-        className="relative"
-      >
+      {/* Sidebar column */}
+      <aside role="complementary" aria-label="Primary navigation" className="relative">
         <Sidebar />
       </aside>
 
-      {/* Mobile overlay for drawer (click to close) */}
+      {/* Mobile overlay */}
       {open && (
         <div
           ref={overlayRef}
@@ -64,29 +53,32 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
         />
       )}
 
-      {/* Main region */}
+      {/* Main column */}
       <div className="relative min-w-0">
-        {/* mobile toggle row */}
+        {/* mobile header row */}
         <div className="mb-3 flex items-center justify-between md:hidden">
           <SidebarTrigger />
         </div>
 
+        {/* Only the content is width-constrained */}
         <main
           id="app-main"
           role="main"
           tabIndex={-1}
-          className="focus:outline-none"
           aria-live="polite"
+          className="focus:outline-none mx-auto max-w-7xl"
         >
           {children}
         </main>
       </div>
     </div>
-    </SidebarProvider>
   );
 }
 
-export default function AppLayout({ children }: { children: React.ReactNode }) {
-  // Provider sits at RootLayout; simply render the inner layout
-  return <LayoutInner>{children}</LayoutInner>;
+export default function AppLayout({ children }: { children: ReactNode }) {
+  return (
+      <SidebarProvider>
+        <LayoutInner>{children}</LayoutInner>
+      </SidebarProvider>
+  );
 }

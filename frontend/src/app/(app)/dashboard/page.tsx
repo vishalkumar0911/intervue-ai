@@ -317,7 +317,7 @@ export default function DashboardPage() {
   }
 
   return (
-    <RequireRole roles={["Student", "Trainer", "Admin"]}>
+    <RequireRole roles={["Student", "Trainer", "Admin"]} mode="redirect">
     <div className="space-y-8">
       {/* Header + Seed + Export */}
       <div className="flex flex-wrap items-center justify-between gap-3">

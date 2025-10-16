@@ -77,6 +77,14 @@
   ],
   "Backend Developer": [
     {
+      "id": "80da810f-cc26-4d4d-bf75-0f250776ff3e",
+      "role": "Backend Developer",
+      "text": "Define Relational Database.",
+      "topic": "Database",
+      "difficulty": "easy",
+      "source": "trainer"
+    },
+    {
       "id": "2ce9926e-1248-4552-9c29-f0052597b418",
       "role": "Backend Developer",
       "text": "How would you design and secure an API that allows users to create, read, update, and delete job postings?",

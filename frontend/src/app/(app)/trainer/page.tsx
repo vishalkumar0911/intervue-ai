@@ -119,7 +119,7 @@ export default function TrainerPage() {
   }
 
   return (
-    <RequireRole roles={["Trainer", "Admin"]} mode="inline">
+    <RequireRole roles={["Trainer", "Admin"]} mode="redirect">
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>

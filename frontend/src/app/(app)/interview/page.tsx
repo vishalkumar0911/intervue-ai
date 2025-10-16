@@ -1,3 +1,4 @@
+// src/app/(app)/interview/page.tsx
 "use client";
 
 import { needsRoleOnboarding } from "@/lib/rbac";
@@ -12,8 +13,9 @@ import {
   Volume2, VolumeX, Timer, StickyNote,
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Textarea } from "@/components/ui/Textarea";
+import Link from "next/link";
 
+import { Textarea } from "@/components/ui/Textarea";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import RoleSelect from "@/components/RoleSelect";
@@ -50,6 +52,8 @@ type Prefs = {
 
 export default function InterviewPage() {
   const { user, loading } = useAuth();
+  const isPrivileged = user?.role === "Trainer" || user?.role === "Admin";
+
   const router = useRouter();
   const search = useSearchParams();
   const focusId = search.get("focus") || undefined;
@@ -336,7 +340,7 @@ export default function InterviewPage() {
   }
 
   return (
-    <RequireRole roles={["Student"]} mode="inline">
+    <RequireRole roles={["Student"]} mode="redirect">
       <main className="min-h-screen">
         <section className="mx-auto max-w-5xl px-4 py-10 md:py-14">
           <div className="mb-6 flex items-center gap-2">
@@ -457,8 +461,38 @@ export default function InterviewPage() {
             </Card>
           )}
 
+          {/* >>> Enhanced empty-state (role-aware) <<< */}
           {!loading && role && bank.length === 0 && (
-            <p className="mt-3 text-sm text-muted-foreground">Try another difficulty or enable Shuffle.</p>
+            <Card className="mt-4">
+              {isPrivileged ? (
+                <div className="flex items-start gap-3">
+                  <Info className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <p className="font-medium text-foreground">No questions found for this filter.</p>
+                    <p className="text-sm text-muted-foreground">
+                      You can add questions in the Trainer UI.
+                    </p>
+                    <div className="pt-2">
+                      <Link href="/trainer/questions" className="inline-flex">
+                        <Button>Go to Trainer Questions</Button>
+                      </Link>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-start gap-3">
+                  <Info className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
+                  <div className="space-y-2">
+                    <p className="font-medium text-foreground">No questions match your current filters.</p>
+                    <ul className="list-disc pl-5 text-sm text-muted-foreground space-y-1">
+                      <li>Try a different difficulty (or clear difficulty).</li>
+                      <li>Toggle shuffle off/on.</li>
+                      <li>Pick another role.</li>
+                    </ul>
+                  </div>
+                </div>
+              )}
+            </Card>
           )}
 
           {role && (

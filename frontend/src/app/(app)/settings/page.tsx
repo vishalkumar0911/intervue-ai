@@ -1,7 +1,7 @@
 // src/app/(app)/settings/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
@@ -19,6 +19,14 @@ export default function SettingsPage() {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // 🔧 Dev tools flag (compile-time, safe for client)
+  const devTools = useMemo(
+    () => process.env.NEXT_PUBLIC_DEV_TOOLS === "true",
+    []
+  );
+  const [seedLoading, setSeedLoading] = useState(false);
+  const [seedCount, setSeedCount] = useState(10);
 
   // Prefill from auth (redirect if not logged in)
   useEffect(() => {
@@ -72,6 +80,29 @@ export default function SettingsPage() {
     }
   }
 
+  // 🔧 Seed attempts (dev-only)
+  async function seedAttempts() {
+    try {
+      setSeedLoading(true);
+      const res = await fetch(`/api/dev/seed?count=${seedCount}`, {
+        // GET is fine for a dev utility; if you implemented POST, flip this:
+        method: "GET",
+        cache: "no-store",
+      });
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(txt || "Failed to seed attempts");
+      }
+      const data = await res.json().catch(() => null);
+      const added = (data && (data.added ?? data.count ?? seedCount)) || seedCount;
+      toast.success(`Seeded ${added} attempt${added === 1 ? "" : "s"}.`);
+    } catch (e: any) {
+      toast.error(e?.message || "Seeding failed");
+    } finally {
+      setSeedLoading(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="max-w-2xl space-y-6">
@@ -90,7 +121,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <RequireRole roles={["Student", "Trainer", "Admin"]}>
+    <RequireRole roles={["Student", "Trainer", "Admin"]} mode="redirect">
       <div className="max-w-2xl space-y-6">
         <h1 className="text-2xl font-semibold">Settings</h1>
 
@@ -153,6 +184,36 @@ export default function SettingsPage() {
             </div>
           </form>
         </Card>
+
+        {/* 🔧 Developer tools (hidden by default) */}
+        {devTools && (
+          <Card className="space-y-4">
+            <div>
+              <h2 className="text-sm font-medium text-foreground">Developer tools</h2>
+              <p className="text-sm text-muted-foreground">
+                Quickly generate demo attempts for charts and dashboards.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <label htmlFor="seedCount" className="text-sm text-muted-foreground">
+                Count
+              </label>
+              <input
+                id="seedCount"
+                type="number"
+                min={1}
+                max={200}
+                value={seedCount}
+                onChange={(e) => setSeedCount(Math.max(1, Math.min(200, Number(e.target.value) || 10)))}
+                className="w-24 rounded-xl border border-input bg-transparent px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/70 focus-ring"
+              />
+              <Button onClick={seedAttempts} isLoading={seedLoading}>
+                Seed attempts
+              </Button>
+            </div>
+          </Card>
+        )}
       </div>
     </RequireRole>
   );

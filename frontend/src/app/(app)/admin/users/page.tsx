@@ -61,6 +61,14 @@ export default function AdminUsersPage() {
   const [audit, setAudit] = useState<AuditEvent[]>([]);
   const [auditLoading, setAuditLoading] = useState(false);
 
+  // Seed controls
+  const [seeding, setSeeding] = useState(false);
+  const [seedCount, setSeedCount] = useState(20);
+  const [seedRole, setSeedRole] = useState<string>("");
+
+  // Roles list for the seeding dropdown
+  const [roles, setRoles] = useState<string[]>([]);
+
   // Debounce search
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQ(q.trim().toLowerCase()), 250);
@@ -94,9 +102,22 @@ export default function AdminUsersPage() {
     }
   }
 
+  // load users + audit initially
   useEffect(() => {
     void load();
     void loadAudit();
+  }, []);
+
+  // load roles once (for seeding dropdown)
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await api.roles();
+        setRoles(r || []);
+      } catch {
+        // non-blocking
+      }
+    })();
   }, []);
 
   const filtered = useMemo(() => {
@@ -165,6 +186,34 @@ export default function AdminUsersPage() {
     }
   }
 
+  async function seedAttempts() {
+    // validate
+    const count = Number.isFinite(seedCount) ? Math.max(1, Math.min(500, seedCount)) : 20;
+    if (count !== seedCount) setSeedCount(count);
+
+    setSeeding(true);
+    try {
+      const res = await fetch("/api/admin/seed", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          count,                     // 1..500 supported by backend
+          seed: 42,                  // deterministic if you like
+          role: seedRole || undefined, // optional role restriction
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      toast.success(`Seeded ${data.created ?? count} attempts`);
+      // optional: refresh audit to show seeding activity if you log it later
+      void loadAudit();
+    } catch (e: any) {
+      toast.error(e?.message || "Seeding failed");
+    } finally {
+      setSeeding(false);
+    }
+  }
+
   function exportCsv() {
     const rowsCsv = [
       ["id", "name", "email", "role"],
@@ -181,14 +230,16 @@ export default function AdminUsersPage() {
   }
 
   return (
-    <RequireRole roles={["Admin"]} mode="inline">
+    <RequireRole roles={["Admin"]} mode="redirect">
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-semibold text-foreground">Users</h1>
             <p className="text-muted-foreground">Manage roles and access.</p>
           </div>
-          <div className="flex items-center gap-2">
+
+          {/* Actions */}
+          <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" onClick={exportCsv} className="gap-2">
               <Download className="h-4 w-4" /> Export
             </Button>
@@ -280,6 +331,54 @@ export default function AdminUsersPage() {
                 )}
               </tbody>
             </table>
+          </div>
+        </Card>
+
+        {/* Seed attempts (Admin-only helper) */}
+        <Card>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 className="text-sm font-medium text-foreground">Seed attempts</h2>
+              <p className="text-xs text-muted-foreground">
+                Create demo attempts for charts/testing (server-side).
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Count input */}
+              <label className="text-sm">
+                <span className="mr-2 text-muted-foreground">Count</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={500}
+                  value={seedCount}
+                  onChange={(e) =>
+                    setSeedCount(Math.max(1, Math.min(500, Number(e.target.value) || 1)))
+                  }
+                  className="w-24 rounded-xl border border-input bg-background px-3 py-2 text-sm focus-ring"
+                />
+              </label>
+
+              {/* Optional role dropdown (populated from API) */}
+              <label className="text-sm">
+                <span className="ml-2 mr-2 text-muted-foreground">Only role</span>
+                <select
+                  value={seedRole}
+                  onChange={(e) => setSeedRole(e.target.value)}
+                  className="w-64 rounded-xl border border-input bg-background px-3 py-2 text-sm focus-ring"
+                >
+                  <option value="">(all roles)</option>
+                  {roles.map((r) => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
+              </label>
+
+              <Button onClick={seedAttempts} isLoading={seeding} className="ml-2">
+                Seed attempts
+              </Button>
+            </div>
           </div>
         </Card>
 

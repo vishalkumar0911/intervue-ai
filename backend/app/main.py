@@ -1,6 +1,8 @@
 # backend/app/main.py
 from __future__ import annotations
 
+import logging
+import contextvars
 import csv
 import hashlib
 import io
@@ -13,7 +15,7 @@ import uuid
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Tuple, Optional
 from uuid import UUID
 
 from app.models import Question, AttemptCreate, Attempt, AttemptUpdate
@@ -75,6 +77,27 @@ settings = Settings()
 print("[BOOT] BACKEND_API_KEY =", repr(settings.BACKEND_API_KEY))  # debug
 print("[BOOT] FRONTEND_URL    =", repr(settings.FRONTEND_URL))     # debug
 
+# -------------------- Logging --------------------
+logger = logging.getLogger("intervue")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
+# correlation id context
+REQUEST_ID: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
+
+def _log_json(level: str, **fields):
+    # small structured logger to print a JSON line
+    try:
+        payload = {"level": level, **fields}
+        logger.log(logging.INFO if level in {"info","warning"} else logging.ERROR, json.dumps(payload))
+    except Exception:
+        # never let logging crash the request
+        logger.warning("failed to serialize log line")
+
 # -------------------- App --------------------
 tags_metadata = [
     {"name": "health", "description": "Health and server info"},
@@ -91,6 +114,43 @@ app = FastAPI(
     version="1.5.1",
     openapi_tags=tags_metadata,
 )
+
+# -------------------- Correlation-ID + access log middleware --------------------
+@app.middleware("http")
+async def add_request_id_and_log(request: Request, call_next):
+    import time as _t, uuid as _uuid
+
+    # get/propagate incoming X-Request-ID
+    rid = request.headers.get("x-request-id") or str(_uuid.uuid4())
+    REQUEST_ID.set(rid)
+
+    start = _t.time()
+    try:
+        response = await call_next(request)
+    finally:
+        # compute timing & log after response is ready
+        dur_ms = int((_t.time() - start) * 1000)
+        client_ip = request.client.host if request.client else "unknown"
+        # path without query for signal, but include query separately if you prefer
+        path = request.url.path
+        # Response might not exist if an exception bubbled to exception handler,
+        # so grab status from scope if available
+        status = getattr(locals().get("response", None), "status_code", None)
+
+        _log_json(
+            "info",
+            event="http_access",
+            request_id=rid,
+            method=request.method,
+            path=path,
+            status=status,
+            duration_ms=dur_ms,
+            client_ip=client_ip,
+        )
+
+    # attach correlation id to the response
+    response.headers["X-Request-ID"] = rid
+    return response
 
 # -------------------- CORS --------------------
 def _split_csv(s: str) -> List[str]:
@@ -129,12 +189,6 @@ def file_size(path: Path) -> int:
     except Exception:
         return 0
 
-def load_questions_from_disk() -> None:
-    global QUESTIONS, QUESTIONS_MTIME
-    path = questions_path()
-    data = json.loads(path.read_text(encoding="utf-8"))
-    QUESTIONS = {role: [Question(**q) for q in qs] for role, qs in data.items()}
-    QUESTIONS_MTIME = path.stat().st_mtime
 
 def hot_reload_if_changed() -> None:
     path = questions_path()
@@ -163,7 +217,6 @@ def require_api_key(
     if not expected:
         return  # open mode
 
-    # Try header (accept common variants + trim)
     header_key = (
         x_api_key
         or request.headers.get("x-api-key")
@@ -173,11 +226,18 @@ def require_api_key(
     if header_key == expected:
         return
 
-    # Fallback: query param ?api_key=...
     qp = (request.query_params.get("api_key") or "").strip()
     if qp == expected:
         return
 
+    _log_json(
+        "warning",
+        event="auth_denied",
+        reason="invalid_api_key",
+        request_id=REQUEST_ID.get(),
+        client_ip=(request.client.host if request.client else "unknown"),
+        path=request.url.path,
+    )
     raise HTTPException(status_code=401, detail="Invalid API key")
 
 # per-IP sliding window limiter {ip -> deque[timestamps]}
@@ -191,6 +251,15 @@ def _rate_limit(request: Request, bucket: dict[str, deque[float]], rate: int, wi
     while dq and now - dq[0] > window:
         dq.popleft()
     if len(dq) >= rate:
+        _log_json(
+            "warning",
+            event="rate_limited",
+            request_id=REQUEST_ID.get(),
+            client_ip=ip,
+            path=request.url.path,
+            rate=rate,
+            window_sec=window,
+        )
         raise HTTPException(status_code=429, detail="Too many requests")
     dq.append(now)
 
@@ -336,15 +405,80 @@ def _etag_json(request: Request, data: Any, max_age: int = 30) -> Response:
         return Response(status_code=304, headers=headers)
     return Response(content=body, media_type="application/json", headers=headers)
 
+def _coerce_grouped_questions(raw: Any) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Accept either:
+      - grouped dict: { "Role": [ {..}, ... ], ... }
+      - legacy flat list: [ { role: "Role", ... }, ... ]
+    and return grouped dict with role filled.
+    """
+    if isinstance(raw, dict):
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for role, arr in raw.items():
+            bucket: List[Dict[str, Any]] = []
+            if isinstance(arr, list):
+                for it in arr:
+                    if not isinstance(it, dict):
+                        continue
+                    q = dict(it)
+                    q["role"] = role
+                    bucket.append(q)
+            grouped[str(role)] = bucket
+        return grouped
+
+    if isinstance(raw, list):
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for it in raw:
+            if not isinstance(it, dict):
+                continue
+            q = dict(it)
+            role = (q.get("role") or "Uncategorized")
+            q["role"] = role
+            grouped.setdefault(str(role), []).append(q)
+        return grouped
+
+    return {}
+
+
+def load_questions_from_disk() -> None:
+    """
+    Load questions from disk and tolerate both grouped and legacy flat shapes.
+    Keeps the in-memory QUESTIONS as {role: List[Question]}.
+    """
+    global QUESTIONS, QUESTIONS_MTIME
+    path = questions_path()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        QUESTIONS = {}
+        QUESTIONS_MTIME = 0.0
+        return
+
+    grouped = _coerce_grouped_questions(raw)
+    # Coerce each item into the Pydantic Question model
+    QUESTIONS = {
+        role: [Question(**q) for q in (arr or []) if isinstance(q, dict)]
+        for role, arr in grouped.items()
+    }
+    QUESTIONS_MTIME = path.stat().st_mtime
+
 # -------------------- Error handlers --------------------
 @app.exception_handler(ValidationError)
 async def on_validation_error(_: Request, exc: ValidationError):
     return JSONResponse(status_code=422, content={"detail": exc.errors(), "message": "Validation failed"})
 
 @app.exception_handler(Exception)
-async def on_unhandled(_: Request, exc: Exception):
+async def on_unhandled(request: Request, exc: Exception):
     if isinstance(exc, HTTPException):
+        # let FastAPI handle HTTPExceptions normally
         raise exc
+    _log_json(
+        "error",
+        event="unhandled_exception",
+        request_id=REQUEST_ID.get(),
+        path=str(request.url.path),
+        message=str(exc),
+    )
     return JSONResponse(status_code=500, content={"detail": "Internal server error", "message": str(exc)})
 
 # -------------------- Health --------------------
@@ -514,14 +648,28 @@ def get_attempt_by_id(attempt_id: UUID):
     dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)],
 )
 def add_attempt(payload: AttemptCreate = Body(...)):
-    """Create a new attempt; server assigns id and default date if missing."""
-    if payload.role not in QUESTIONS:
+    """
+    Create a new attempt; server assigns id and default date if missing.
+    Additional guards:
+      - non-empty role (after trim)
+      - role must exist in current QUESTIONS bank
+      - difficulty, if present, must be one of easy|medium|hard
+      - duration_min enforced by Pydantic (1..240)
+    """
+    role = (payload.role or "").strip()
+    if not role:
+        # Will typically be caught by Pydantic 422, but keep explicit guard for clarity.
+        raise HTTPException(status_code=422, detail="Role is required")
+
+    if role not in QUESTIONS:
         raise HTTPException(status_code=400, detail="Unknown role")
+
     if payload.difficulty and payload.difficulty not in {"easy", "medium", "hard"}:
         raise HTTPException(status_code=400, detail="Invalid difficulty")
+
     attempt = Attempt(
         id=str(uuid.uuid4()),
-        role=payload.role,
+        role=role,
         score=payload.score,
         duration_min=payload.duration_min,
         date=payload.date or datetime.now(timezone.utc),  # timezone-aware UTC
