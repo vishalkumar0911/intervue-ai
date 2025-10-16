@@ -14,16 +14,24 @@ import {
   ChevronLeft,
   ChevronRight,
   X,
+  Users,
+  Shield,
+  HeartPulse,
 } from "lucide-react";
 
-/* ----------------------------- context & hook ----------------------------- */
+import { useAuth } from "@/components/auth/AuthProvider";
+import { hasAnyRole, type Role } from "@/lib/rbac"; // ✅ Role union type ("Student"|"Trainer"|"Admin")
+
+/* ----------------------------- context ----------------------------- */
 
 type SidebarContextType = {
-  collapsed: boolean;  // desktop collapsed
-  open: boolean;       // mobile drawer
-  toggle(): void;      // mobile: open/close
-  collapse(): void;    // desktop: collapse
-  expand(): void;      // desktop: expand
+  collapsed: boolean;      // desktop collapsed
+  setCollapsed: (v: boolean) => void; // ✅ expose setter
+  open: boolean;           // mobile drawer open
+  setOpen: (v: boolean) => void;      // ✅ expose setter
+  toggle(): void;          // mobile: open/close
+  collapse(): void;        // desktop: collapse
+  expand(): void;          // desktop: expand
 };
 
 const SidebarContext = createContext<SidebarContextType | null>(null);
@@ -57,7 +65,9 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 
   const value: SidebarContextType = {
     collapsed,
+    setCollapsed,          // ✅
     open,
+    setOpen,               // ✅
     toggle: () => setOpen((v) => !v),
     collapse: () => setCollapsed(true),
     expand: () => setCollapsed(false),
@@ -85,22 +95,34 @@ export function SidebarTrigger() {
 /* --------------------------------- content -------------------------------- */
 
 type IconType = React.ComponentType<{ className?: string; size?: number | string }>;
-type Item = { href: string; label: string; icon: IconType };
+type Item = {
+  href: string;
+  label: string;
+  icon: IconType;
+  roles?: Role[]; // ✅ exact type
+};
 
+// roles: omit/empty => visible to all
 const NAV: Item[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/interview", label: "Interview", icon: Mic },
-  { href: "/analytics", label: "Analytics", icon: BarChart2 },
-  { href: "/bookmarks", label: "Bookmarks", icon: Bookmark },
+  { href: "/interview", label: "Interview", icon: Mic, roles: ["Student"] },
+  { href: "/analytics", label: "Analytics", icon: BarChart2, roles: ["Student", "Trainer", "Admin"] },
+  { href: "/bookmarks", label: "Bookmarks", icon: Bookmark, roles: ["Student"] },
   { href: "/settings", label: "Settings", icon: SettingsIcon },
+  { href: "/trainer/questions", label: "Trainer", icon: Users, roles: ["Trainer", "Admin"] },
+  { href: "/admin/users", label: "Admin", icon: Shield, roles: ["Admin"] },
+  { href: "/admin/health", label: "Health", icon: HeartPulse, roles: ["Admin"] },
 ];
 
 function NavList({ collapsed }: { collapsed: boolean }) {
   const pathname = usePathname();
+  const { user } = useAuth();
+
+  const visible = NAV.filter((item) => !item.roles || hasAnyRole(user, item.roles));
 
   return (
     <ul className="mt-1 space-y-1" role="list">
-      {NAV.map(({ href, label, icon: Icon }) => {
+      {visible.map(({ href, label, icon: Icon }) => {
         const active = pathname === href || (href !== "/" && pathname.startsWith(href + "/"));
         return (
           <li key={href}>
@@ -132,7 +154,7 @@ function DesktopSidebar() {
     <aside
       className={clsx(
         "relative hidden md:block",
-        "sticky top-24 h-[calc(100vh-6rem)] overflow-y-auto nice-scrollbar",
+        "sticky top-20 h-[calc(100vh-5rem)] overflow-y-auto nice-scrollbar", // 🔼 slightly higher
         "transition-[width] duration-300 ease-in-out",
         collapsed ? "w-[72px]" : "w-[264px]"
       )}
@@ -172,7 +194,6 @@ function MobileDrawer() {
   const { open, toggle } = useSidebar();
   const pathname = usePathname();
 
-  // Close on route change or ESC
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && toggle();
@@ -189,15 +210,8 @@ function MobileDrawer() {
 
   return (
     <>
-      <div
-        className="fixed inset-0 z-[95] bg-black/40 backdrop-blur-sm"
-        onClick={toggle}
-        aria-hidden
-      />
-      <aside
-        className="fixed left-0 top-0 z-[100] h-svh w-[280px] p-3 md:hidden"
-        aria-label="Mobile navigation"
-      >
+      <div className="fixed inset-0 z-[95] bg-black/40 backdrop-blur-sm" onClick={toggle} aria-hidden />
+      <aside className="fixed left-0 top-0 z-[100] h-svh w-[280px] p-3 md:hidden" aria-label="Mobile navigation">
         <div className="surface h-full">
           <div className="flex items-center justify-between px-2 pb-3 pt-2">
             <div className="flex items-center gap-2">
@@ -224,7 +238,6 @@ function MobileDrawer() {
   );
 }
 
-/** Default export: renders both desktop sidebar and mobile drawer */
 export default function Sidebar() {
   return (
     <>

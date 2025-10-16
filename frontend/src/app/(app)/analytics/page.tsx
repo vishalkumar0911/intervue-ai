@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/Card";
 import { api, type Attempt } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
+import RequireRole from "@/components/auth/RequireRole";
 import {
   LineChart,
   Line,
@@ -339,6 +340,7 @@ export default function AnalyticsPage() {
   /* --------------------------------- render -------------------------------- */
 
   return (
+    <RequireRole roles={["Student","Trainer", "Admin"]} mode="redirect">
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
@@ -660,5 +662,6 @@ export default function AnalyticsPage() {
         </div>
       )}
     </div>
+    </RequireRole>
   );
 }

@@ -57,11 +57,11 @@ export default function ForgotPasswordPage() {
       });
 
       // Always show success message regardless of existence of the email
-      toast.success("If that email exists, we’ve sent a reset link.");
+      toast.success("We’ve sent a reset link.");
       router.push("/login");
     } catch {
       // We still avoid leaking whether the email exists; keep generic UX
-      toast.success("If that email exists, we’ve sent a reset link.");
+      toast.success("We’ve sent a reset link.");
       router.push("/login");
     } finally {
       setLoading(false);

@@ -55,6 +55,22 @@ function err(message: string, code?: string) {
   return e;
 }
 
+/** set/clear dev cookie consumed by trainer API proxy (→ x-demo-email) */
+function setDemoCookie(email: string | null) {
+  if (!isBrowser()) return;
+  try {
+    if (email) {
+      // 30d, Lax so same-origin fetches include it; Path=/ to be global
+      document.cookie =
+        `demoEmail=${encodeURIComponent(email)}; Path=/; Max-Age=${60 * 60 * 24 * 30}; SameSite=Lax`;
+    } else {
+      document.cookie = "demoEmail=; Path=/; Max-Age=0; SameSite=Lax";
+    }
+  } catch {
+    // ignore cookie write errors in very strict browsers
+  }
+}
+
 // -------------------------------- validators --------------------------------
 
 export function isValidEmail(input: string) {
@@ -117,6 +133,7 @@ function migrateLegacyIfNeeded() {
         writeUsers(users);
       }
       localStorage.setItem(SESSION_KEY, email);
+      setDemoCookie(email); // keep dev cookie in sync when migrating
     }
   } catch {
     // ignore parse errors
@@ -213,6 +230,7 @@ export async function signup(p: {
   users[email] = stored;
   writeUsers(users);
   localStorage.setItem(SESSION_KEY, email);
+  setDemoCookie(email); // 🔑 enable dev-proxy access to trainer endpoints
   emit();
   return pub(stored);
 }
@@ -230,6 +248,7 @@ export async function login(p: { email: string; password: string }): Promise<Use
   if (!ok) throw err("Invalid email or password.", "BAD_CREDENTIALS");
 
   localStorage.setItem(SESSION_KEY, email);
+  setDemoCookie(email); // 🔑 enable dev-proxy access to trainer endpoints
   emit();
   return pub(u);
 }
@@ -239,6 +258,7 @@ export async function login(p: { email: string; password: string }): Promise<Use
 export function logout() {
   if (!isBrowser()) return;
   localStorage.removeItem(SESSION_KEY);
+  setDemoCookie(null); // 🔑 revoke dev access for trainer endpoints
   emit();
 }
 
@@ -253,6 +273,7 @@ export function updateProfile(partial: Partial<Pick<User, "name" | "role">>) {
   if (!u) return;
   users[email] = { ...u, ...partial };
   writeUsers(users);
+  // no cookie change needed (email is identity for dev access)
   emit();
 }
 
@@ -296,7 +317,10 @@ export async function updatePasswordLocal(emailRaw: string, newPassword: string)
   writeUsers(users);
 
   // keep the user logged in if they are the current session
-  if (getSessionEmailRaw() === email) emit();
+  if (getSessionEmailRaw() === email) {
+    setDemoCookie(email); // ensure cookie still present after reset
+    emit();
+  }
 }
 
 /**
@@ -322,6 +346,7 @@ export async function changePassword(currentPassword: string, newPassword: strin
   u.algo = "s256";
   u.passwordHash = await hashSalted(newPassword, salt);
   writeUsers(users);
+  setDemoCookie(email); // keep cookie alive after change
   emit();
 }
 
@@ -341,7 +366,7 @@ export function __deleteUser(emailRaw: string) {
   if (users[email]) {
     delete users[email];
     writeUsers(users);
-    if (getSessionEmailRaw() === email) logout();
+    if (getSessionEmailRaw() === email) logout(); // clears cookie too
     emit();
   }
 }

@@ -1,11 +1,15 @@
 "use client";
 
+import { needsRoleOnboarding } from "@/lib/rbac";
+import { useAuth } from "@/components/auth/AuthProvider";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { TrendingUp, Clock, Target, Plus, Trash2, Download } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@/components/Card";
 import { api, type Attempt, type AttemptCreate } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
+import RequireRole from "@/components/auth/RequireRole";
 
 /* ---------- helpers ---------- */
 
@@ -114,10 +118,11 @@ function DateInput({
 const SEED_PREFS_KEY = "dashboard:seedPrefs";
 
 export default function DashboardPage() {
+  const { user, loading } = useAuth();
+  const router = useRouter();
   // Load attempts via SWR-like hook
   const {
     data: attempts = [],
-    loading,
     error,
     setData, // local mutate
     refetch,
@@ -197,6 +202,12 @@ export default function DashboardPage() {
   // ---------------- Seed controls (with localStorage persistence) ----------------
   const [seedRole, setSeedRole] = useState<string>("");
   const [seedDifficulty, setSeedDifficulty] = useState<"" | "easy" | "medium" | "hard">("");
+
+  useEffect(() => {
+    if (!loading && user && needsRoleOnboarding(user)) {
+      router.replace("/onboarding?next=/dashboard");
+    }
+  }, [user, loading, router]);
 
   // hydrate from localStorage
   useEffect(() => {
@@ -306,6 +317,7 @@ export default function DashboardPage() {
   }
 
   return (
+    <RequireRole roles={["Student", "Trainer", "Admin"]} mode="redirect">
     <div className="space-y-8">
       {/* Header + Seed + Export */}
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -552,5 +564,6 @@ export default function DashboardPage() {
         )}
       </section>
     </div>
+    </RequireRole>
   );
 }

@@ -11,11 +11,13 @@ import { useAuth } from "@/components/auth/AuthProvider";
 import { signIn } from "next-auth/react";
 
 export default function LoginPage() {
+  const { user } = useAuth();
   const router = useRouter();
   const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [pass, setPass]   = useState("");
   const [loading, setLoading] = useState(false);
+  
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -80,6 +82,12 @@ export default function LoginPage() {
         <span>or</span>
         <div className="h-px flex-1 bg-border" />
       </div>
+
+      {user?.role && (
+        <p className="mt-3 text-sm text-muted-foreground">
+          Logged in as <span className="font-medium">{user.role}</span>
+        </p>
+      )}
 
       <Button
         variant="secondary"

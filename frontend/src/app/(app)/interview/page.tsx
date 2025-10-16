@@ -1,5 +1,8 @@
+// src/app/(app)/interview/page.tsx
 "use client";
 
+import { needsRoleOnboarding } from "@/lib/rbac";
+import { useAuth } from "@/components/auth/AuthProvider";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
@@ -10,8 +13,9 @@ import {
   Volume2, VolumeX, Timer, StickyNote,
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Textarea } from "@/components/ui/Textarea";
+import Link from "next/link";
 
+import { Textarea } from "@/components/ui/Textarea";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import RoleSelect from "@/components/RoleSelect";
@@ -26,6 +30,7 @@ import {
   removeBookmark,
 } from "@/lib/bookmarks";
 import { getNote, setNote, exportNotesCSV } from "@/lib/notes";
+import RequireRole from "@/components/auth/RequireRole";
 
 /* ---------- small utils ---------- */
 function pad(n: number) { return n < 10 ? `0${n}` : String(n); }
@@ -46,6 +51,9 @@ type Prefs = {
 };
 
 export default function InterviewPage() {
+  const { user, loading } = useAuth();
+  const isPrivileged = user?.role === "Trainer" || user?.role === "Admin";
+
   const router = useRouter();
   const search = useSearchParams();
   const focusId = search.get("focus") || undefined;
@@ -60,7 +68,6 @@ export default function InterviewPage() {
   const shuffle = useInterviewStore((s) => s.shuffle);
   const bank = useInterviewStore((s) => s.bank);
   const index = useInterviewStore((s) => s.index);
-  const loading = useInterviewStore((s) => s.loading);
   const error = useInterviewStore((s) => s.error);
 
   const setRole = useInterviewStore((s) => s.setRole);
@@ -89,6 +96,12 @@ export default function InterviewPage() {
     } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!loading && user && needsRoleOnboarding(user)) {
+      router.replace("/onboarding?next=/interview");
+    }
+  }, [loading, user, router]);
 
   // Allow deep link role override
   useEffect(() => {
@@ -327,301 +340,333 @@ export default function InterviewPage() {
   }
 
   return (
-    <main className="min-h-screen">
-      <section className="mx-auto max-w-5xl px-4 py-10 md:py-14">
-        <div className="mb-6 flex items-center gap-2">
-          <Sparkles className="h-5 w-5 text-accent-400" />
-          <h1 className="text-2xl font-semibold text-foreground">Mock Interview</h1>
-        </div>
+    <RequireRole roles={["Student"]} mode="redirect">
+      <main className="min-h-screen">
+        <section className="mx-auto max-w-5xl px-4 py-10 md:py-14">
+          <div className="mb-6 flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-accent-400" />
+            <h1 className="text-2xl font-semibold text-foreground">Mock Interview</h1>
+          </div>
 
-        <p className="text-sm text-muted-foreground">
-          Pick a role, tweak difficulty, and practice. Your questions load from your local API.
-        </p>
+          <p className="text-sm text-muted-foreground">
+            Pick a role, tweak difficulty, and practice. Your questions load from your local API.
+          </p>
 
-        {/* controls bar */}
-        <div className="mt-6 grid gap-4 md:grid-cols-[2fr_1fr_auto]">
-          <RoleSelect
-            roles={roles}
-            value={role}
-            onChange={(r) => { setRole(r); toast.success(`Role: ${r}`); }}
-          />
-          <DifficultySelect value={difficulty as Difficulty} onChange={setDifficulty} />
-          <div className="flex items-end">
-            <ShuffleToggle
-              checked={shuffle}
-              onChange={(v) => { setShuffle(v); toast.message(v ? "Shuffle on" : "Shuffle off"); }}
+          {/* controls bar */}
+          <div className="mt-6 grid gap-4 md:grid-cols-[2fr_1fr_auto]">
+            <RoleSelect
+              roles={roles}
+              value={role}
+              onChange={(r) => { setRole(r); toast.success(`Role: ${r}`); }}
             />
-          </div>
-        </div>
-
-        {/* secondary toolbar */}
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
-          <button
-            onClick={() => {
-              const on = !prefs.tts;
-              setPrefs((p) => ({ ...p, tts: on }));
-              if (on && current?.text) speak(current.text);
-              if (!on) cancelSpeech();
-            }}
-            className={[
-              "inline-flex items-center gap-2 rounded-lg px-3 py-1.5 focus-ring",
-              prefs.tts
-                ? "bg-brand-500/15 text-foreground ring-1 ring-brand-500/30"
-                : "bg-secondary text-foreground/80 hover:bg-secondary/80 border border-border"
-            ].join(" ")}
-            title="Toggle speech"
-          >
-            {prefs.tts ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
-            Speak
-          </button>
-
-          <button
-            onClick={copyQuestion}
-            className="inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-1.5 text-foreground/80 hover:bg-secondary/80 focus-ring"
-            title="Copy question"
-          >
-            <Copy className="h-4 w-4" />Copy Ques.
-          </button>
-
-          <button
-            onClick={() => setNotesOpen((v) => !v)}
-            className="inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-1.5 text-foreground/80 hover:bg-secondary/80 focus-ring"
-            title="Notes"
-          >
-            <StickyNote className="h-4 w-4" /> Notes
-          </button>
-
-          <div className="mx-2 h-4 w-px bg-border" />
-
-          <div className="inline-flex items-center gap-1">
-            <Timer className="h-4 w-4 opacity-80" />
-            <span className="text-muted-foreground">Auto-next:</span>
-            {([0, 15, 30, 60] as const).map((sec) => (
-              <button
-                key={sec}
-                onClick={() => setCountdown(sec)}
-                className={[
-                  "rounded-lg border px-2 py-1 text-xs focus-ring",
-                  prefs.qSecs === sec
-                    ? "border-brand-500/30 bg-brand-500/15 text-foreground"
-                    : "border-border bg-secondary text-foreground/80 hover:bg-secondary/80",
-                ].join(" ")}
-              >
-                {sec === 0 ? "off" : `${sec}s`}
-              </button>
-            ))}
-            {prefs.qSecs ? (
-              <span className="ml-2 rounded-md bg-muted px-2 py-0.5 text-xs text-foreground/80">
-                {fmtMMSS(remaining)}
-              </span>
-            ) : null}
-          </div>
-        </div>
-
-        {/* errors */}
-        {error && (
-          <div
-            className="mt-4 flex items-center gap-3 rounded-2xl border p-4 text-sm
-                       border-destructive/40 bg-destructive/10 text-destructive-foreground"
-            role="alert"
-          >
-            <Info className="h-4 w-4" />
-            <span>{error}</span>
-          </div>
-        )}
-
-        {!role && (
-          <Card>
-            <div className="flex items-start gap-3">
-              <Keyboard className="h-5 w-5 text-brand-500 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-medium text-foreground">Choose a role to begin</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Tip: use <kbd className="rounded bg-muted px-1">P</kbd> /
-                  <kbd className="rounded bg-muted px-1">N</kbd> or
-                  <kbd className="rounded bg-muted px-1">←</kbd>
-                  <kbd className="rounded bg-muted px-1">→</kbd> to switch.
-                </p>
-              </div>
+            <DifficultySelect value={difficulty as Difficulty} onChange={setDifficulty} />
+            <div className="flex items-end">
+              <ShuffleToggle
+                checked={shuffle}
+                onChange={(v) => { setShuffle(v); toast.message(v ? "Shuffle on" : "Shuffle off"); }}
+              />
             </div>
-          </Card>
-        )}
+          </div>
 
-        {!loading && role && bank.length === 0 && (
-          <p className="mt-3 text-sm text-muted-foreground">Try another difficulty or enable Shuffle.</p>
-        )}
+          {/* secondary toolbar */}
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+            <button
+              onClick={() => {
+                const on = !prefs.tts;
+                setPrefs((p) => ({ ...p, tts: on }));
+                if (on && current?.text) speak(current.text);
+                if (!on) cancelSpeech();
+              }}
+              className={[
+                "inline-flex items-center gap-2 rounded-lg px-3 py-1.5 focus-ring",
+                prefs.tts
+                  ? "bg-brand-500/15 text-foreground ring-1 ring-brand-500/30"
+                  : "bg-secondary text-foreground/80 hover:bg-secondary/80 border border-border"
+              ].join(" ")}
+              title="Toggle speech"
+            >
+              {prefs.tts ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+              Speak
+            </button>
 
-        {role && (
-          <div className="card p-6 mt-6">
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0 flex-1">
-                <p
-                  aria-live="polite"
-                  className="text-xs uppercase tracking-wide text-brand-700/80 dark:text-brand-300/80"
+            <button
+              onClick={copyQuestion}
+              className="inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-1.5 text-foreground/80 hover:bg-secondary/80 focus-ring"
+              title="Copy question"
+            >
+              <Copy className="h-4 w-4" />Copy Ques.
+            </button>
+
+            <button
+              onClick={() => setNotesOpen((v) => !v)}
+              className="inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-1.5 text-foreground/80 hover:bg-secondary/80 focus-ring"
+              title="Notes"
+            >
+              <StickyNote className="h-4 w-4" /> Notes
+            </button>
+
+            <div className="mx-2 h-4 w-px bg-border" />
+
+            <div className="inline-flex items-center gap-1">
+              <Timer className="h-4 w-4 opacity-80" />
+              <span className="text-muted-foreground">Auto-next:</span>
+              {([0, 15, 30, 60] as const).map((sec) => (
+                <button
+                  key={sec}
+                  onClick={() => setCountdown(sec)}
+                  className={[
+                    "rounded-lg border px-2 py-1 text-xs focus-ring",
+                    prefs.qSecs === sec
+                      ? "border-brand-500/30 bg-brand-500/15 text-foreground"
+                      : "border-border bg-secondary text-foreground/80 hover:bg-secondary/80",
+                  ].join(" ")}
                 >
-                  Question {bank.length ? index + 1 : 0}{bank.length ? ` of ${bank.length}` : ""}
-                </p>
+                  {sec === 0 ? "off" : `${sec}s`}
+                </button>
+              ))}
+              {prefs.qSecs ? (
+                <span className="ml-2 rounded-md bg-muted px-2 py-0.5 text-xs text-foreground/80">
+                  {fmtMMSS(remaining)}
+                </span>
+              ) : null}
+            </div>
+          </div>
 
-                <div className="mt-1 min-h-[92px] md:min-h-[112px] lg:min-h-[124px] flex items-start">
-                  <div aria-live="polite" aria-atomic="true" className="w-full">
-                    <AnimatePresence mode="wait">
-                      <motion.h3
-                        key={bank.length ? (bank[index]?.id ?? index) : "empty"}
-                        initial={{ opacity: 0, y: 6 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -6 }}
-                        transition={{ duration: 0.18 }}
-                        className="text-2xl md:text-3xl font-semibold tracking-tight leading-tight text-foreground"
-                      >
-                        {loading ? (
-                          <span className="inline-flex items-center gap-2 text-muted-foreground">
-                            <Loader2 className="h-4 w-4 animate-spin" /> Loading…
-                          </span>
-                        ) : (
-                          current?.text ?? "No questions."
-                        )}
-                      </motion.h3>
-                    </AnimatePresence>
+          {/* errors */}
+          {error && (
+            <div
+              className="mt-4 flex items-center gap-3 rounded-2xl border p-4 text-sm
+                         border-destructive/40 bg-destructive/10 text-destructive-foreground"
+              role="alert"
+            >
+              <Info className="h-4 w-4" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          {!role && (
+            <Card>
+              <div className="flex items-start gap-3">
+                <Keyboard className="h-5 w-5 text-brand-500 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-medium text-foreground">Choose a role to begin</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Tip: use <kbd className="rounded bg-muted px-1">P</kbd> /
+                    <kbd className="rounded bg-muted px-1">N</kbd> or
+                    <kbd className="rounded bg-muted px-1">←</kbd>
+                    <kbd className="rounded bg-muted px-1">→</kbd> to switch.
+                  </p>
+                </div>
+              </div>
+            </Card>
+          )}
+
+          {/* >>> Enhanced empty-state (role-aware) <<< */}
+          {!loading && role && bank.length === 0 && (
+            <Card className="mt-4">
+              {isPrivileged ? (
+                <div className="flex items-start gap-3">
+                  <Info className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <p className="font-medium text-foreground">No questions found for this filter.</p>
+                    <p className="text-sm text-muted-foreground">
+                      You can add questions in the Trainer UI.
+                    </p>
+                    <div className="pt-2">
+                      <Link href="/trainer/questions" className="inline-flex">
+                        <Button>Go to Trainer Questions</Button>
+                      </Link>
+                    </div>
                   </div>
                 </div>
+              ) : (
+                <div className="flex items-start gap-3">
+                  <Info className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
+                  <div className="space-y-2">
+                    <p className="font-medium text-foreground">No questions match your current filters.</p>
+                    <ul className="list-disc pl-5 text-sm text-muted-foreground space-y-1">
+                      <li>Try a different difficulty (or clear difficulty).</li>
+                      <li>Toggle shuffle off/on.</li>
+                      <li>Pick another role.</li>
+                    </ul>
+                  </div>
+                </div>
+              )}
+            </Card>
+          )}
 
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  {current?.topic && <Badge variant="neutral">Topic: {current.topic}</Badge>}
-                  {current?.difficulty && (
-                    <span
-                      className={[
-                        "inline-flex items-center rounded-xl px-2.5 py-1 text-xs ring-1 ring-border",
-                        current.difficulty === "easy" && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-200",
-                        current.difficulty === "medium" && "bg-amber-500/10 text-amber-700 dark:text-amber-200",
-                        current.difficulty === "hard" && "bg-rose-500/10 text-rose-700 dark:text-rose-200",
-                      ].join(" ")}
-                    >
-                      Difficulty: {current.difficulty}
-                    </span>
-                  )}
-
-                  <button
-                    onClick={toggleBookmark}
-                    className="ml-2 inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-2 py-1 text-foreground/80 hover:bg-secondary/80 focus-ring"
-                    title={bookmarked ? "Remove bookmark" : "Bookmark this question"}
+          {role && (
+            <div className="card p-6 mt-6">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <p
+                    aria-live="polite"
+                    className="text-xs uppercase tracking-wide text-brand-700/80 dark:text-brand-300/80"
                   >
-                    {bookmarked ? <Star className="h-4 w-4 text-yellow-500" /> : <StarOff className="h-4 w-4" />}
-                    <span className="text-xs">{bookmarked ? "Bookmarked" : "Bookmark"}</span>
+                    Question {bank.length ? index + 1 : 0}{bank.length ? ` of ${bank.length}` : ""}
+                  </p>
+
+                  <div className="mt-1 min-h-[92px] md:min-h-[112px] lg:min-h-[124px] flex items-start">
+                    <div aria-live="polite" aria-atomic="true" className="w-full">
+                      <AnimatePresence mode="wait">
+                        <motion.h3
+                          key={bank.length ? (bank[index]?.id ?? index) : "empty"}
+                          initial={{ opacity: 0, y: 6 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -6 }}
+                          transition={{ duration: 0.18 }}
+                          className="text-2xl md:text-3xl font-semibold tracking-tight leading-tight text-foreground"
+                        >
+                          {loading ? (
+                            <span className="inline-flex items-center gap-2 text-muted-foreground">
+                              <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+                            </span>
+                          ) : (
+                            current?.text ?? "No questions."
+                          )}
+                        </motion.h3>
+                      </AnimatePresence>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    {current?.topic && <Badge variant="neutral">Topic: {current.topic}</Badge>}
+                    {current?.difficulty && (
+                      <span
+                        className={[
+                          "inline-flex items-center rounded-xl px-2.5 py-1 text-xs ring-1 ring-border",
+                          current.difficulty === "easy" && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-200",
+                          current.difficulty === "medium" && "bg-amber-500/10 text-amber-700 dark:text-amber-200",
+                          current.difficulty === "hard" && "bg-rose-500/10 text-rose-700 dark:text-rose-200",
+                        ].join(" ")}
+                      >
+                        Difficulty: {current.difficulty}
+                      </span>
+                    )}
+
+                    <button
+                      onClick={toggleBookmark}
+                      className="ml-2 inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-2 py-1 text-foreground/80 hover:bg-secondary/80 focus-ring"
+                      title={bookmarked ? "Remove bookmark" : "Bookmark this question"}
+                    >
+                      {bookmarked ? <Star className="h-4 w-4 text-yellow-500" /> : <StarOff className="h-4 w-4" />}
+                      <span className="text-xs">{bookmarked ? "Bookmarked" : "Bookmark"}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <Button variant="secondary" onClick={onReset} disabled={loading} title="Clear and refetch" className="inline-flex items-center gap-2">
+                    <RefreshCw className="h-4 w-4" /> Reset
+                  </Button>
+                  <Button variant="ghost" onClick={tryPrev} disabled={loading || !bank.length} title="Shortcut: P or ←" className="inline-flex items-center gap-2">
+                    <ChevronLeft className="h-4 w-4" /> Prev
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      cancelSpeech();
+                      next();
+                      if (prefs.qSecs) endRef.current = Date.now() + prefs.qSecs * 1000;
+                      if (bank.length) {
+                        toast.message("Next question", { description: `#${index + 2} of ${bank.length}` });
+                      }
+                    }}
+                    disabled={loading || !bank.length}
+                    title="Shortcut: N or →"
+                    className="inline-flex items-center gap-2"
+                  >
+                    {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronRight className="h-4 w-4" />} Next
+                  </Button>
+                </div>
+              </div>
+
+              {/* progress */}
+              <div className="mt-6 h-2 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  role="progressbar" aria-valuemin={0} aria-valuemax={bank.length || 0}
+                  aria-valuenow={Math.min(index + 1, bank.length)}
+                  className="h-full bg-gradient-to-r from-brand-500 to-accent-500 transition-[width] duration-300"
+                  style={{ width: bank.length ? `${((index + 1) / bank.length) * 100}%` : "0%" }} />
+              </div>
+
+              {/* footer & notes */}
+              <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+                <p className="text-xs text-muted-foreground">
+                  Session time: {fmtMMSS(elapsed)}
+                  {prefs.qSecs ? (
+                    <span className="ml-3 inline-flex items-center gap-1 text-foreground/70">
+                      <Timer className="h-3 w-3" /> <span>Next in: {fmtMMSS(remaining)}</span>
+                    </span>
+                  ) : null}
+                </p>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setNotesOpen((v) => !v)}
+                    className="inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-1.5 text-foreground/80 hover:bg-secondary/80 focus-ring"
+                    title="Open notes">
+                    <StickyNote className="h-4 w-4" /> Notes
                   </button>
+                  <button
+                    onClick={() => exportNotesCSV()}
+                    className="inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-1.5 text-foreground/80 hover:bg-secondary/80 focus-ring"
+                    title="Export notes">
+                    Export notes
+                  </button>
+
+                  {!completeOpen ? (
+                    <Button variant="primary" onClick={() => setCompleteOpen(true)} disabled={!role || !bank.length || loading} className="inline-flex items-center gap-2" title="Save this session">
+                      <CheckCircle2 className="h-4 w-4" /> Complete session
+                    </Button>
+                  ) : (
+                    <Button variant="ghost" onClick={() => setCompleteOpen(false)} className="inline-flex items-center gap-2" title="Cancel">
+                      <X className="h-4 w-4" /> Cancel
+                    </Button>
+                  )}
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0">
-                <Button variant="secondary" onClick={onReset} disabled={loading} title="Clear and refetch" className="inline-flex items-center gap-2">
-                  <RefreshCw className="h-4 w-4" /> Reset
-                </Button>
-                <Button variant="ghost" onClick={tryPrev} disabled={loading || !bank.length} title="Shortcut: P or ←" className="inline-flex items-center gap-2">
-                  <ChevronLeft className="h-4 w-4" /> Prev
-                </Button>
-                <Button
-                  onClick={() => {
-                    cancelSpeech();
-                    next();
-                    if (prefs.qSecs) endRef.current = Date.now() + prefs.qSecs * 1000;
-                    if (bank.length) {
-                      toast.message("Next question", { description: `#${index + 2} of ${bank.length}` });
-                    }
-                  }}
-                  disabled={loading || !bank.length}
-                  title="Shortcut: N or →"
-                  className="inline-flex items-center gap-2"
-                >
-                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronRight className="h-4 w-4" />} Next
-                </Button>
-              </div>
-            </div>
+              {/* notes panel */}
+              {notesOpen && current?.id && (
+                <div className="surface p-4 mt-4">
+                  <p className="mb-2 text-sm text-muted-foreground">Notes for this question</p>
+                  <Textarea
+                    value={note}
+                    onChange={(e) => setNoteState(e.target.value)}
+                    placeholder="Write your thoughts, structure, hints…"
+                    className="min-h-[120px]"
+                  />
 
-            {/* progress */}
-            <div className="mt-6 h-2 w-full overflow-hidden rounded-full bg-muted">
-              <div
-                role="progressbar" aria-valuemin={0} aria-valuemax={bank.length || 0}
-                aria-valuenow={Math.min(index + 1, bank.length)}
-                className="h-full bg-gradient-to-r from-brand-500 to-accent-500 transition-[width] duration-300"
-                style={{ width: bank.length ? `${((index + 1) / bank.length) * 100}%` : "0%" }} />
-            </div>
+                </div>
+              )}
 
-            {/* footer & notes */}
-            <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
-              <p className="text-xs text-muted-foreground">
-                Session time: {fmtMMSS(elapsed)}
-                {prefs.qSecs ? (
-                  <span className="ml-3 inline-flex items-center gap-1 text-foreground/70">
-                    <Timer className="h-3 w-3" /> <span>Next in: {fmtMMSS(remaining)}</span>
-                  </span>
-                ) : null}
-              </p>
-
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setNotesOpen((v) => !v)}
-                  className="inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-1.5 text-foreground/80 hover:bg-secondary/80 focus-ring"
-                  title="Open notes">
-                  <StickyNote className="h-4 w-4" /> Notes
-                </button>
-                <button
-                  onClick={() => exportNotesCSV()}
-                  className="inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-1.5 text-foreground/80 hover:bg-secondary/80 focus-ring"
-                  title="Export notes">
-                  Export notes
-                </button>
-
-                {!completeOpen ? (
-                  <Button variant="primary" onClick={() => setCompleteOpen(true)} disabled={!role || !bank.length || loading} className="inline-flex items-center gap-2" title="Save this session">
-                    <CheckCircle2 className="h-4 w-4" /> Complete session
-                  </Button>
-                ) : (
-                  <Button variant="ghost" onClick={() => setCompleteOpen(false)} className="inline-flex items-center gap-2" title="Cancel">
-                    <X className="h-4 w-4" /> Cancel
-                  </Button>
-                )}
-              </div>
-            </div>
-
-            {/* notes panel */}
-            {notesOpen && current?.id && (
-              <div className="surface p-4 mt-4">
-                <p className="mb-2 text-sm text-muted-foreground">Notes for this question</p>
-                <Textarea
-                  value={note}
-                  onChange={(e) => setNoteState(e.target.value)}
-                  placeholder="Write your thoughts, structure, hints…"
-                  className="min-h-[120px]"
-                />
-
-              </div>
-            )}
-
-            {/* complete/save panel */}
-            {completeOpen && (
-              <div className="surface p-4 mt-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-foreground">Set your score</p>
-                    <p className="text-xs text-muted-foreground">Move the slider and click Save</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className={`inline-flex items-center rounded-lg px-2 py-1 text-xs ring-1 ${scorePill(score)}`}>{score}</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      value={score}
-                      onChange={(e) => setScore(parseInt(e.target.value))}
-                      className="w-48 accent-brand-500"
-                    />
-                    <Button onClick={saveAttempt} className="ml-1">Save</Button>
+              {/* complete/save panel */}
+              {completeOpen && (
+                <div className="surface p-4 mt-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-foreground">Set your score</p>
+                      <p className="text-xs text-muted-foreground">Move the slider and click Save</p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className={`inline-flex items-center rounded-lg px-2 py-1 text-xs ring-1 ${scorePill(score)}`}>{score}</span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        value={score}
+                        onChange={(e) => setScore(parseInt(e.target.value))}
+                        className="w-48 accent-brand-500"
+                      />
+                      <Button onClick={saveAttempt} className="ml-1">Save</Button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
-          </div>
-        )}
-      </section>
-    </main>
+              )}
+            </div>
+          )}
+        </section>
+      </main>
+    </RequireRole>
   );
 }

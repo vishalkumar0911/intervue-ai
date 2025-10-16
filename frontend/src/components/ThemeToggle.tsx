@@ -1,18 +1,24 @@
 "use client";
 import { Moon, Sun } from "lucide-react";
 import { useTheme } from "@/components/ThemeProvider";
+import { useEffect, useState } from "react";
 
 export function ThemeToggle() {
   const { theme, toggle } = useTheme();
-  const isDark = theme === "dark";
+
+  // Avoid SSR/CSR label/icon mismatches
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  const isDark = mounted && theme === "dark";
   const label = isDark ? "Switch to light mode" : "Switch to dark mode";
 
   return (
     <button
       type="button"
       onClick={toggle}
-      aria-label={label}
-      title={label}
+      aria-label="Toggle theme"      // stays static on SSR
+      title={label}                  // tooltip can change after mount
       aria-pressed={isDark}
       className={[
         "group relative inline-flex h-10 w-10 items-center justify-center rounded-xl transition-colors focus-ring",
@@ -22,16 +28,24 @@ export function ThemeToggle() {
         "dark:border-white/10 dark:bg-white/5 dark:text-white dark:hover:bg-white/10",
       ].join(" ")}
     >
-      {/* Icons overlap and crossfade */}
+      {/* Crossfading icons */}
       <Sun
         aria-hidden="true"
         size={18}
-        className="absolute rotate-90 scale-90 opacity-0 transition-all duration-200 group-hover:scale-100 dark:rotate-0 dark:scale-100 dark:opacity-100"
+        className={`absolute transition-all duration-200 ${
+          isDark
+            ? "rotate-90 scale-90 opacity-0"
+            : "rotate-0 scale-100 opacity-100 group-hover:scale-100"
+        }`}
       />
       <Moon
         aria-hidden="true"
         size={18}
-        className="absolute rotate-0 scale-100 opacity-100 transition-all duration-200 group-hover:scale-100 dark:rotate-90 dark:scale-90 dark:opacity-0"
+        className={`absolute transition-all duration-200 ${
+          isDark
+            ? "rotate-0 scale-100 opacity-100 group-hover:scale-100"
+            : "rotate-90 scale-90 opacity-0"
+        }`}
       />
     </button>
   );

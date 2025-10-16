@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Trash2, Copy, Play, Upload, Download, X, Search } from "lucide-react";
 import { toast } from "sonner";
+import RequireRole from "@/components/auth/RequireRole";
 
 import type { Bookmark } from "@/lib/bookmarks";
 import {
@@ -157,6 +158,7 @@ export default function BookmarksPage() {
   }
 
   return (
+    <RequireRole roles={["Student"]} mode="redirect">
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">Bookmarks</h1>
@@ -306,5 +308,6 @@ export default function BookmarksPage() {
         </div>
       )}
     </div>
+    </RequireRole>
   );
 }
