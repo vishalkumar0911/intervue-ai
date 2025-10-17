@@ -780,10 +780,12 @@ def stats():
 # -------------------- Auth / Password routers (existing) --------------------
 from app.routers import password
 from app.routers.auth import router as oauth_router
+from app.routers.local_auth import router as local_auth_router
 
 # Guard these with API key + mutate limiter
 app.include_router(password.router,    dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)])
 app.include_router(oauth_router,       dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)])
+app.include_router(local_auth_router,  dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)])
 
 # -------------------- Role/OAuth + Admin + Trainer routers (NEW) ------------
 # Protect them in the same way (API key + mutate limiter)

@@ -11,7 +11,7 @@
     "id": "102455925389132325188",
     "email": "pankajkrg93@gmail.com",
     "name": "Pankaj kumar Gupta",
-    "role": "Trainer",
+    "role": "Student",
     "provider": "google",
     "createdAt": 1758238924
   },
@@ -22,5 +22,29 @@
     "role": "Trainer",
     "provider": "google",
     "createdAt": 1758256225
+  },
+  "test@example.com": {
+    "id": "test@example.com",
+    "email": "test@example.com",
+    "name": "Test User",
+    "role": null,
+    "provider": "local",
+    "createdAt": 1760659720
+  },
+  "proxytest@example.com": {
+    "id": "proxytest@example.com",
+    "email": "proxytest@example.com",
+    "name": "Proxy Test",
+    "role": null,
+    "provider": "local",
+    "createdAt": 1760662223
+  },
+  "jayant@example.com": {
+    "id": "jayant@example.com",
+    "email": "jayant@example.com",
+    "name": "jayant",
+    "role": null,
+    "provider": "local",
+    "createdAt": 1760662529
   }
 }
