@@ -8,13 +8,16 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { toast } from "sonner";
 import { useAuth } from "@/components/auth/AuthProvider";
+import { signIn } from "next-auth/react";
 
 export default function LoginPage() {
+  const { user } = useAuth();
   const router = useRouter();
   const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [pass, setPass]   = useState("");
   const [loading, setLoading] = useState(false);
+  
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -62,13 +65,11 @@ export default function LoginPage() {
           value={pass}
           onChange={(e) => setPass(e.target.value)}
         />
-
         <p className="text-right text-sm">
           <Link href="/forgot-password" className="text-muted-foreground hover:text-foreground underline underline-offset-4">
             Forgot password?
           </Link>
         </p>
-
         <div className="pt-1">
           <Button type="submit" isLoading={loading} className="w-full">
             Sign in
@@ -82,9 +83,15 @@ export default function LoginPage() {
         <div className="h-px flex-1 bg-border" />
       </div>
 
+      {user?.role && (
+        <p className="mt-3 text-sm text-muted-foreground">
+          Logged in as <span className="font-medium">{user.role}</span>
+        </p>
+      )}
+
       <Button
         variant="secondary"
-        onClick={() => toast.info("Social login not enabled yet")}
+        onClick={() => signIn("google", { callbackUrl: "/dashboard" }, { prompt: "select_account" })}
         className="mt-3 w-full"
       >
         Continue with Google

@@ -1,0 +1,50 @@
+{
+  "pankajkrg2016@gmail.com": {
+    "id": "104021921506679217939",
+    "email": "pankajkrg2016@gmail.com",
+    "name": "Pankaj Kumar Gupta",
+    "role": "Admin",
+    "provider": "google",
+    "createdAt": 1758238653
+  },
+  "pankajkrg93@gmail.com": {
+    "id": "102455925389132325188",
+    "email": "pankajkrg93@gmail.com",
+    "name": "Pankaj kumar Gupta",
+    "role": "Student",
+    "provider": "google",
+    "createdAt": 1758238924
+  },
+  "trainer@example.com": {
+    "id": "sub123",
+    "email": "trainer@example.com",
+    "name": "Trainer T",
+    "role": "Trainer",
+    "provider": "google",
+    "createdAt": 1758256225
+  },
+  "test@example.com": {
+    "id": "test@example.com",
+    "email": "test@example.com",
+    "name": "Test User",
+    "role": null,
+    "provider": "local",
+    "createdAt": 1760659720
+  },
+  "proxytest@example.com": {
+    "id": "proxytest@example.com",
+    "email": "proxytest@example.com",
+    "name": "Proxy Test",
+    "role": null,
+    "provider": "local",
+    "createdAt": 1760662223
+  },
+  "jayant@example.com": {
+    "id": "jayant@example.com",
+    "email": "jayant@example.com",
+    "name": "jayant",
+    "role": null,
+    "provider": "local",
+    "createdAt": 1760662529
+  }
+}

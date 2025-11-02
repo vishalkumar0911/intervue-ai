@@ -69,12 +69,25 @@ export default function SignupPage() {
           value={email}
           onChange={(e) => setEmail(e.target.value)}
         />
-        <Input
-          label="Preferred role (optional)"
-          placeholder="e.g. Backend Developer"
-          value={role}
-          onChange={(e) => setRole(e.target.value)}
-        />
+        <div>
+          <label className="mb-1 block text-sm text-muted-foreground">
+            Select your role
+          </label>
+          <select
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+            required
+            className="z-50 overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-elevated"
+          >
+            <option value="" disabled>
+              -- Choose a role --
+            </option>
+            <option value="Student">Student</option>
+            <option value="Trainer">Trainer</option>
+            <option value="Admin">Admin</option>
+          </select>
+</div>
+
 
         <div className="grid gap-4 md:grid-cols-2">
           <Input

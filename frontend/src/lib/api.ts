@@ -1,5 +1,6 @@
 // src/lib/api.ts
 
+import { toast } from "sonner";
 /* ---------------- Types ---------------- */
 
 export type Question = {
@@ -8,6 +9,10 @@ export type Question = {
   text: string;
   topic?: string | null;
   difficulty?: "easy" | "medium" | "hard" | null;
+
+  // optional metadata used by Trainer UI / backend merge
+  source?: "core" | "trainer";
+  readonly?: boolean | null;
 };
 
 export type Attempt = {
@@ -44,6 +49,11 @@ export type Health = {
   attempts_file: string;
   last_questions_load_ts: number;
   server_time: number;
+
+  // add these (backend provides them)
+  mode?: "open" | "protected";
+  questions_size?: number;
+  attempts_size?: number;
 };
 
 type QuestionsParams = {
@@ -57,32 +67,21 @@ type QuestionsParams = {
 
 /* ---------------- Base + mode detection ---------------- */
 
-/**
- * Two modes:
- * 1) Direct mode (default when FASTAPI_URL / NEXT_PUBLIC_API_BASE_URL is set):
- *    -> Hit FastAPI directly and attach x-api-key for mutating endpoints.
- * 2) Proxy mode (no FASTAPI/NEXT_PUBLIC base provided OR NEXT_PUBLIC_USE_NEXT_PROXY=true):
- *    -> Call same-origin Next.js routes under /api/* (no browser key).
- */
 const DIRECT_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   process.env.FASTAPI_URL ||
-  ""; // empty => proxy mode unless forced
+  "";
 
 const FORCE_PROXY = process.env.NEXT_PUBLIC_USE_NEXT_PROXY === "true";
-const USE_PROXY = FORCE_PROXY || !DIRECT_BASE; // true => use /api/* routes
+const USE_PROXY = FORCE_PROXY || !DIRECT_BASE;
 
 const API_BASE = USE_PROXY ? "" : DIRECT_BASE.replace(/\/+$/, "");
 const API_KEY =
   process.env.NEXT_PUBLIC_API_KEY || process.env.FASTAPI_API_KEY || "";
 
-// Prefix helper: adds /api in proxy mode, otherwise returns path unchanged
 const p = (path: string) => (USE_PROXY ? `/api${path}` : path);
-
-// In direct mode we must attach the key for mutating calls
 const SHOULD_ATTACH_KEY = !USE_PROXY && !!API_KEY;
 
-// Global defaults
 const DEFAULT_TIMEOUT = 12_000;
 const DEFAULT_RETRY = 1;
 
@@ -93,30 +92,100 @@ function qs(params: Record<string, string | undefined>) {
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== "") u.set(k, v);
   }
-  const s = u.toString();
-  return s ? `?${s}` : "";
+  return u.toString() ? `?${u.toString()}` : "";
 }
 
-function fetchWithTimeout(url: string, opts: RequestInit = {}, timeoutMs = DEFAULT_TIMEOUT) {
+function isBrowser() {
+  return typeof window !== "undefined";
+}
+
+function maybeToast(kind: "error" | "warning", message: string, description?: string) {
+  if (!isBrowser()) return;
+  if (kind === "error") toast.error(message, description ? { description } : undefined);
+  else toast(message, description ? { description } : undefined);
+}
+
+function fetchWithTimeout(
+  url: string,
+  opts: RequestInit = {},
+  timeoutMs = DEFAULT_TIMEOUT
+) {
   const ctrl = new AbortController();
   const id = setTimeout(() => ctrl.abort(), timeoutMs);
-  return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(id));
+  const p = fetch(url, { ...opts, signal: ctrl.signal })
+    .catch((e) => {
+      // Network-level errors (DNS, CORS, offline, Abort)
+      const name = (e && (e.name || e.code)) || "";
+      if (name === "AbortError" || name === "TimeoutError") {
+        maybeToast("error", "Request timed out", "Please try again.");
+        const err = new Error("Request timed out");
+        (err as any).code = "TIMEOUT";
+        throw err;
+      }
+      // Other network error
+      maybeToast("error", "Network error", "Check your connection and try again.");
+      const err = new Error("Network error");
+      (err as any).code = "NETWORK";
+      throw err;
+    })
+    .finally(() => clearTimeout(id));
+
+  // ensure we clear the timer on success too
+  return p.finally(() => clearTimeout(id));
 }
 
+
 async function toError(res: Response): Promise<Error> {
-  let msg = `Request failed: ${res.status}`;
+  let detail: string | undefined;
   try {
     const text = await res.text();
-    try {
-      const j = JSON.parse(text);
-      if (j?.detail) msg = Array.isArray(j.detail) ? j.detail[0]?.msg || msg : j.detail;
-      else if (j?.error) msg = j.error || msg;
-      else msg = text || msg;
-    } catch {
-      msg = text || msg;
+    if (text) {
+      try {
+        const j = JSON.parse(text);
+        detail =
+          (Array.isArray(j?.detail) && j.detail[0]?.msg) ||
+          j?.detail ||
+          j?.error ||
+          j?.message ||
+          text;
+      } catch {
+        detail = text;
+      }
     }
   } catch {}
-  return new Error(msg);
+
+  const status = res.status;
+  const rid = res.headers.get("x-request-id") || "";
+
+  if (status === 429) {
+    maybeToast("error", "Too many requests", rid ? `Request ID: ${rid}` : "Please slow down and try again.");
+  } else if (status === 502 || status === 503 || status === 504) {
+    maybeToast("error", "Backend unavailable", rid ? `Request ID: ${rid}` : "Please try again shortly.");
+  } else if (status === 401) {
+    maybeToast("error", "Unauthorized", "Your session or API key is invalid.");
+  } else if (status === 404) {
+    maybeToast("error", "Not found", "The resource you requested does not exist.");
+  } else if (status === 422) {
+    maybeToast("error", "Validation failed", detail || "Please check your input and try again.");
+  } else if (status >= 500) {
+    maybeToast("error", "Server error", rid ? `Request ID: ${rid}` : "Please try again.");
+  }
+
+  const err = new Error(detail || `Request failed: ${status}`);
+  (err as any).status = status;
+  if (rid) (err as any).requestId = rid;
+  return err;
+}
+
+/** small safe toast helper (avoids SSR issues) */
+function toastSafe(kind: "success" | "error" | "message", text: string) {
+  if (typeof window === "undefined") return;
+  // dynamic import avoids loading sonner in SSR or when not needed
+  import("sonner").then(({ toast }) => {
+    if (kind === "success") toast.success(text);
+    else if (kind === "error") toast.error(text);
+    else toast(text);
+  }).catch(() => {});
 }
 
 async function request<T>(
@@ -129,9 +198,9 @@ async function request<T>(
     timeout = DEFAULT_TIMEOUT,
     retry = method === "GET" ? DEFAULT_RETRY : 0,
     cache = "no-store" as RequestCache,
-    auth = false, // if true, attach x-api-key (only in direct mode)
+    auth = false,
   }: {
-    method?: "GET" | "POST" | "PATCH" | "DELETE";
+    method?: "GET" | "POST" | "PATCH" | "DELETE" | "HEAD";
     query?: Record<string, string | undefined>;
     body?: any;
     headers?: Record<string, string>;
@@ -139,7 +208,7 @@ async function request<T>(
     retry?: number;
     cache?: RequestCache;
     auth?: boolean;
-  } = {},
+  } = {}
 ): Promise<T> {
   const urlStr = `${API_BASE}${path}${query ? qs(query) : ""}`;
 
@@ -153,7 +222,7 @@ async function request<T>(
   };
 
   if (body !== undefined) {
-    init.headers = { "Content-Type": "application/json", ...(init.headers || {}) };
+    (init.headers as Record<string, string>)["content-type"] = "application/json";
     init.body = JSON.stringify(body);
   }
 
@@ -161,21 +230,38 @@ async function request<T>(
   while (true) {
     attempt++;
     const res = await fetchWithTimeout(urlStr, init, timeout);
+
+    // 2xx fast path
     if (res.ok) {
       const ct = res.headers.get("content-type") || "";
       if (ct.includes("application/json")) return (await res.json()) as T;
-      // callers of request<T> expect JSON
-      return (await res.json()) as T;
+      const txt = await res.text();
+      try {
+        return JSON.parse(txt) as T;
+      } catch {
+        throw new Error(`Unexpected non-JSON response: ${txt}`);
+      }
     }
+
+    // Friendly messages for common transient states
+    if (res.status === 429) {
+      toastSafe("error", "Too many requests — please slow down.");
+    } else if (res.status === 502 || res.status === 503 || res.status === 504) {
+      toastSafe("error", "Backend unavailable — try again in a moment.");
+    }
+
+    // retry only idempotent-ish GETs on 5xx or network abort
     if (attempt <= retry && (res.status >= 500 || res.status === 0)) {
       await new Promise((r) => setTimeout(r, 200 * attempt));
       continue;
     }
+
     throw await toError(res);
   }
 }
 
 /* ---------------- Small roles cache ---------------- */
+
 let rolesCache: { data: string[]; ts: number } | null = null;
 const ROLES_TTL = 5 * 60_000;
 
@@ -187,7 +273,22 @@ async function getCachedRoles(): Promise<string[]> {
   return data;
 }
 
+// force refresh (bypass cache)
+async function getRolesFresh(): Promise<string[]> {
+  const data = await request<string[]>(p("/roles"));
+  rolesCache = { data, ts: Date.now() };
+  return data;
+}
+
 /* ---------------- API ---------------- */
+
+export type AdminUser = {
+  id: string;
+  name: string;
+  email: string;
+  role?: string | null;
+  createdAt?: number;
+};
 
 export const api = {
   /* health & stats */
@@ -196,6 +297,7 @@ export const api = {
 
   /* roles & questions */
   roles: () => getCachedRoles(),
+  rolesFresh: () => getRolesFresh(),
 
   questions: ({ role, limit = 20, offset = 0, difficulty, shuffle, seed }: QuestionsParams) =>
     request<Question[]>(p("/questions"), {
@@ -236,7 +338,7 @@ export const api = {
     request<Attempt>(p("/attempts"), {
       method: "POST",
       body: a,
-      auth: true, // attach x-api-key only in direct mode
+      auth: true,
     }),
 
   updateAttempt: (id: string, patch: AttemptUpdate) =>
@@ -267,5 +369,59 @@ export const api = {
     a.click();
     a.remove();
     URL.revokeObjectURL(objectUrl);
+  },
+
+  /* auth helpers */
+  auth: {
+    setRole: (role: string) =>
+      request<{ ok: boolean; role: string; id: string }>(p("/auth/role"), {
+        method: "POST",
+        body: { role },
+      }),
+  },
+
+  /* Admin endpoints */
+  admin: {
+    listUsers: () => request<AdminUser[]>(p("/admin/users")),
+    updateUserRole: (id: string, role: "Student" | "Trainer" | "Admin" | null) =>
+      request<AdminUser>(p("/admin/users"), {
+        method: "PATCH",
+        body: { id, role },
+      }),
+  },
+
+  /* Trainer endpoints */
+  trainer: {
+    listQuestions: (params?: {
+      role?: string;
+      topic?: string;
+      difficulty?: "easy" | "medium" | "hard" | null;
+      include_core?: boolean;
+    }) =>
+      request<Question[]>(p("/trainer/questions"), {
+        query: {
+          role: params?.role || undefined,
+          topic: params?.topic || undefined,
+          difficulty: params?.difficulty ?? undefined, // null => omit
+          include_core: params?.include_core ? "true" : undefined,
+        },
+      }),
+
+    createQuestion: (q: Pick<Question, "role" | "text"> & Partial<Question>) =>
+      request<Question>(p("/trainer/questions"), { method: "POST", body: q }),
+
+    updateQuestion: (
+      id: string,
+      patch: Partial<Pick<Question, "text" | "topic" | "difficulty" | "role">>
+    ) =>
+      request<Question>(p(`/trainer/questions/${id}`), {
+        method: "PATCH",
+        body: patch,
+      }),
+
+    deleteQuestion: (id: string) =>
+      request<{ ok: boolean; id: string }>(p(`/trainer/questions/${id}`), {
+        method: "DELETE",
+      }),
   },
 };

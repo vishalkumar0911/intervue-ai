@@ -2,65 +2,66 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ---------------- Base theme tokens (match tailwind.config.js) ---------------- */
+/* ---------------- Base theme tokens ---------------- */
 @layer base {
   :root {
-    /* Semantic palette — LIGHT */
+    /* LIGHT — brighter surfaces, clearer text, softer borders */
     --background: 0 0% 100%;
-    --foreground: 222 47% 11%;
+    --foreground: 224 45% 12%;
 
     --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
+    --card-foreground: 224 45% 12%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 222 47% 11%;
+    --popover-foreground: 224 45% 12%;
 
     --primary: 245 84% 66%;
     --primary-foreground: 0 0% 100%;
 
-    /* Slightly lower value than before for cleaner light surfaces */
-    --secondary: 220 16% 97%;
-    --secondary-foreground: 222 47% 11%;
+    /* Softer neutral surfaces */
+    --secondary: 220 15% 96%;
+    --secondary-foreground: 224 45% 12%;
 
-    --muted: 220 16% 97%;
-    --muted-foreground: 220 9% 40%;
+    --muted: 220 15% 96%;
+    --muted-foreground: 220 10% 38%;
 
     --accent: 191 94% 43%;
     --accent-foreground: 0 0% 100%;
 
-    --destructive: 0 90% 61%;
+    --destructive: 0 85% 60%;
     --destructive-foreground: 0 0% 98%;
 
-    --border: 220 13% 91%;
-    --input: 220 13% 91%;
+    /* Borders slightly darker for definition */
+    --border: 220 12% 88%;
+    --input: 220 12% 88%;
     --ring: 245 84% 66%;
 
     --radius: 14px;
 
-    /* Background helpers (used by utilities, not the body by default) */
+    /* Helpers */
     --grid-color: 220 10% 50%;
     --spot-color: 245 84% 66%;
   }
 
   .dark {
-    /* Semantic palette — DARK */
-    --background: 222 47% 5%;
+    /* DARK — not pure black; a touch lighter for better contrast balance */
+    --background: 223 40% 7%;
     --foreground: 210 40% 96%;
 
-    --card: 222 47% 7%;
+    --card: 223 40% 9%;
     --card-foreground: 210 40% 96%;
 
-    --popover: 222 47% 7%;
+    --popover: 223 40% 9%;
     --popover-foreground: 210 40% 96%;
 
     --primary: 245 84% 66%;
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 217 33% 12%;
+    --secondary: 218 28% 13%;
     --secondary-foreground: 210 40% 96%;
 
-    --muted: 217 33% 12%;
-    --muted-foreground: 215 20% 70%;
+    --muted: 218 28% 13%;
+    --muted-foreground: 215 15% 75%;
 
     --accent: 191 94% 43%;
     --accent-foreground: 210 40% 98%;
@@ -68,15 +69,17 @@
     --destructive: 0 63% 50%;
     --destructive-foreground: 210 40% 98%;
 
-    --border: 217 19% 27%;
-    --input: 217 19% 27%;
+    /* Borders a bit brighter than bg to avoid “inky” slabs */
+    --border: 220 18% 24%;
+    --input: 220 18% 24%;
     --ring: 245 84% 66%;
 
     --grid-color: 0 0% 100%;
     --spot-color: 245 84% 66%;
   }
 
-  html, body {
+  html,
+  body {
     height: 100%;
   }
 
@@ -86,16 +89,13 @@
 
   body {
     @apply bg-background text-foreground antialiased;
-    color-scheme: light dark;              /* helps form controls match theme */
-    @apply transition-colors duration-300; /* smoothen theme toggle */
-
-    /* We draw backgrounds in layout.tsx; keep body clean to avoid wash-out in light mode.
-       If you want the grid/spotlight on specific pages, add the `.bg-frame` helper below. */
+    color-scheme: light dark;
+    @apply transition-colors duration-300;
   }
 
-  ::selection { background: hsl(var(--primary)/0.18); }
+  ::selection { background: hsl(var(--primary) / 0.18); }
 
-  /* Professional base typography */
+  /* Typography */
   h1 { @apply text-3xl md:text-4xl font-semibold tracking-tight; }
   h2 { @apply text-2xl md:text-3xl font-semibold tracking-tight; }
   h3 { @apply text-xl md:text-2xl font-semibold tracking-tight; }
@@ -105,39 +105,52 @@
   code { @apply rounded bg-muted px-1.5 py-0.5 text-sm; }
   kbd { @apply rounded border bg-secondary px-1 text-xs font-medium; }
 
-  /* Reduced motion: disable subtle animations for users who request it */
   @media (prefers-reduced-motion: reduce) {
     * { animation: none !important; transition: none !important; }
+    html { scroll-behavior: auto !important; }
   }
 }
 
 /* ---------------- Components ---------------- */
 @layer components {
-  .card {
-    @apply bg-card text-card-foreground rounded-2xl border shadow-soft;
-  }
-  .surface {
-    @apply bg-card/70 backdrop-blur-sm border rounded-xl shadow-soft;
-  }
+  .card { @apply bg-card text-card-foreground rounded-2xl border shadow-soft; }
+  .surface { @apply bg-card/70 backdrop-blur-sm border rounded-xl shadow-soft; }
 
   .btn-primary {
     @apply inline-flex items-center justify-center rounded-xl px-4 py-2 font-medium
-           text-primary-foreground bg-primary transition
-           hover:opacity-90 focus-visible:outline-none focus-visible:ring-2
-           focus-visible:ring-ring/60 focus-visible:ring-offset-2 ring-offset-background;
+           text-primary-foreground bg-primary transition hover:opacity-90 focus-ring;
   }
-
-  /* link-style secondary button used in Navbar */
   .btn-secondary {
     @apply inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm
-           border border-border bg-secondary/60 text-foreground hover:bg-secondary
-           focus-ring;
+           border border-border bg-secondary/60 text-foreground hover:bg-secondary focus-ring;
+  }
+  .btn-destructive {
+    @apply inline-flex items-center justify-center rounded-xl px-4 py-2 font-medium
+           text-destructive-foreground bg-destructive hover:opacity-90 focus-ring;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm
+           text-foreground hover:bg-muted/30 focus-ring;
   }
 
-  /* glassy top bar */
+  .card-hover { @apply card transition hover:shadow-lg hover:border-primary/40; }
+
   .nav-glass {
     @apply border-b border-border bg-background/70 backdrop-blur
            supports-[backdrop-filter]:bg-background/70;
+  }
+
+  .input {
+    @apply w-full rounded-xl border border-input bg-background px-3 py-2 text-sm
+           placeholder:text-muted-foreground focus-ring;
+  }
+
+  /* Custom select with inline SVG caret (raw CSS bg-image; not @apply) */
+  .select {
+    @apply input pr-8 appearance-none bg-no-repeat bg-right;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23666' stroke-width='2'><path d='M19 9l-7 7-7-7'/></svg>");
+    background-size: 1rem;
+    background-position: right 0.5rem center;
   }
 }
 
@@ -150,7 +163,13 @@
            focus-visible:ring-offset-2 ring-offset-background;
   }
 
-  /* Opt-in background frame (use on a wrapper div, not body) */
+  .focus-outline {
+    @apply outline-none focus-visible:ring-2 focus-visible:ring-ring/70
+           focus-visible:ring-offset-2 ring-offset-background;
+  }
+
+  .smooth-hover { @apply transition-colors transition-opacity duration-200; }
+
   .bg-frame {
     background-image:
       radial-gradient(600px 300px at var(--spot-x,50%) var(--spot-y,12%), hsl(var(--spot-color)/0.16), transparent 60%),
@@ -169,9 +188,11 @@
 
   .bg-spotlight {
     background-image:
-      radial-gradient(600px 300px at var(--spot-x,50%) var(--spot-y,15%),
-                      hsl(var(--spot-color)/0.20), transparent 60%);
+      radial-gradient(600px 300px at var(--spot-x,50%) var(--spot-y,15%), hsl(var(--spot-color)/0.20), transparent 60%);
   }
+
+  .bg-grid-spot { @apply bg-grid bg-spotlight; }
+  .text-body { @apply text-foreground leading-7; }
 
   /* Nice thin scrollbar */
   .nice-scrollbar { scrollbar-width: thin; scrollbar-color: hsl(var(--muted-foreground)) transparent; }

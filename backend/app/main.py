@@ -1,6 +1,8 @@
 # backend/app/main.py
 from __future__ import annotations
 
+import logging
+import contextvars
 import csv
 import hashlib
 import io
@@ -13,7 +15,7 @@ import uuid
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Tuple, Optional
 from uuid import UUID
 
 from app.models import Question, AttemptCreate, Attempt, AttemptUpdate
@@ -21,6 +23,7 @@ from fastapi import (
     Body,
     Depends,
     FastAPI,
+    Header,
     HTTPException,
     Query,
     Request,
@@ -30,26 +33,70 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from starlette.middleware.gzip import GZipMiddleware
+
+# NEW: import extra routers (files you added)
+from app.routes_admin import router as admin_router
+from app.routes_trainer import router as trainer_router
 
 # -------------------- Settings --------------------
 class Settings(BaseSettings):
+    """Typed env with sane defaults. Extra keys are ignored (no crashes)."""
+
+    # CORS: comma-separated list
     BACKEND_CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
-    QUESTIONS_FILE: str = ""  # optional override
-    ATTEMPTS_FILE: str = ""  # optional override (defaults to data/attempts.jsonl)
-    BACKEND_API_KEY: Optional[str] = None  # optional API key for mutating endpoints
+
+    # Optional overrides for data locations
+    QUESTIONS_FILE: str = ""
+    ATTEMPTS_FILE: str = ""
+
+    # API key — when set, mutating + auth routes require it
+    BACKEND_API_KEY: Optional[str] = None
 
     # Rate limit knobs (per IP)
-    RL_READ_RATE: int = 60  # requests / minute
-    RL_MUTATE_RATE: int = 20  # requests / minute
+    RL_READ_RATE: int = 60   # requests / minute
+    RL_MUTATE_RATE: int = 20 # requests / minute
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    # Used by auth/forgot/reset + JWT-bearing proxy calls
+    APP_JWT_SECRET: Optional[str] = None
+    FRONTEND_URL: str = "http://localhost:3000"
+    RESET_TOKEN_EXPIRES_MIN: int = 30
+    RESEND_API_KEY: Optional[str] = None
+    EMAIL_FROM: Optional[str] = None
 
+    # pydantic-settings v2 config
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",  # don't crash if .env has keys not listed above
+    )
 
 settings = Settings()
+print("[BOOT] BACKEND_API_KEY =", repr(settings.BACKEND_API_KEY))  # debug
+print("[BOOT] FRONTEND_URL    =", repr(settings.FRONTEND_URL))     # debug
+
+# -------------------- Logging --------------------
+logger = logging.getLogger("intervue")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
+# correlation id context
+REQUEST_ID: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
+
+def _log_json(level: str, **fields):
+    # small structured logger to print a JSON line
+    try:
+        payload = {"level": level, **fields}
+        logger.log(logging.INFO if level in {"info","warning"} else logging.ERROR, json.dumps(payload))
+    except Exception:
+        # never let logging crash the request
+        logger.warning("failed to serialize log line")
 
 # -------------------- App --------------------
 tags_metadata = [
@@ -58,62 +105,89 @@ tags_metadata = [
     {"name": "search", "description": "Search questions"},
     {"name": "attempts", "description": "Session attempts CRUD"},
     {"name": "stats", "description": "Aggregated statistics"},
+    {"name": "auth", "description": "OAuth + password flows"},
     {"name": "dev", "description": "Developer utilities / seeders"},
 ]
 
 app = FastAPI(
     title="Intervue.AI API",
-    version="1.5.0",
+    version="1.5.1",
     openapi_tags=tags_metadata,
 )
 
-# CORS
-origins = [o.strip() for o in settings.BACKEND_CORS_ORIGINS.split(",") if o.strip()]
+# -------------------- Correlation-ID + access log middleware --------------------
+@app.middleware("http")
+async def add_request_id_and_log(request: Request, call_next):
+    import time as _t, uuid as _uuid
+
+    # get/propagate incoming X-Request-ID
+    rid = request.headers.get("x-request-id") or str(_uuid.uuid4())
+    REQUEST_ID.set(rid)
+
+    start = _t.time()
+    try:
+        response = await call_next(request)
+    finally:
+        # compute timing & log after response is ready
+        dur_ms = int((_t.time() - start) * 1000)
+        client_ip = request.client.host if request.client else "unknown"
+        # path without query for signal, but include query separately if you prefer
+        path = request.url.path
+        # Response might not exist if an exception bubbled to exception handler,
+        # so grab status from scope if available
+        status = getattr(locals().get("response", None), "status_code", None)
+
+        _log_json(
+            "info",
+            event="http_access",
+            request_id=rid,
+            method=request.method,
+            path=path,
+            status=status,
+            duration_ms=dur_ms,
+            client_ip=client_ip,
+        )
+
+    # attach correlation id to the response
+    response.headers["X-Request-ID"] = rid
+    return response
+
+# -------------------- CORS --------------------
+def _split_csv(s: str) -> List[str]:
+    return [o.strip() for o in (s or "").split(",") if o.strip()]
+
+origins = _split_csv(settings.BACKEND_CORS_ORIGINS)
+print("[BOOT] CORS origins     =", origins)  # debug
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins or ["*"],
+    allow_origins=origins,          # ✅ uses your env-provided origins
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"],            # includes Authorization for Bearer tokens
 )
 
-# GZip compression
+# -------------------- Compression --------------------
 app.add_middleware(GZipMiddleware, minimum_size=500)
 
 # -------------------- Data loading --------------------
 QUESTIONS: Dict[str, List[Question]] = {}
 QUESTIONS_MTIME: float = 0.0
 
-
 def _root() -> Path:
     return Path(__file__).resolve().parent.parent
 
-
 def questions_path() -> Path:
-    if settings.QUESTIONS_FILE:
-        return Path(settings.QUESTIONS_FILE).resolve()
-    return (_root() / "data" / "questions.json").resolve()
-
+    return Path(settings.QUESTIONS_FILE).resolve() if settings.QUESTIONS_FILE else (_root() / "data" / "questions.json").resolve()
 
 def attempts_path() -> Path:
-    if settings.ATTEMPTS_FILE:
-        return Path(settings.ATTEMPTS_FILE).resolve()
-    return (_root() / "data" / "attempts.jsonl").resolve()
-
+    return Path(settings.ATTEMPTS_FILE).resolve() if settings.ATTEMPTS_FILE else (_root() / "data" / "attempts.jsonl").resolve()
 
 def file_size(path: Path) -> int:
     try:
         return path.stat().st_size
     except Exception:
         return 0
-
-
-def load_questions_from_disk() -> None:
-    global QUESTIONS, QUESTIONS_MTIME
-    path = questions_path()
-    data = json.loads(path.read_text(encoding="utf-8"))
-    QUESTIONS = {role: [Question(**q) for q in qs] for role, qs in data.items()}
-    QUESTIONS_MTIME = path.stat().st_mtime
 
 
 def hot_reload_if_changed() -> None:
@@ -125,7 +199,6 @@ def hot_reload_if_changed() -> None:
     except FileNotFoundError:
         pass
 
-
 @app.on_event("startup")
 def startup() -> None:
     load_questions_from_disk()
@@ -135,18 +208,41 @@ def startup() -> None:
         p.touch()
 
 # -------------------- Security & Rate limiting --------------------
-def require_api_key(request: Request):
-    if not settings.BACKEND_API_KEY:
-        return
-    key = request.headers.get("x-api-key") or request.query_params.get("api_key")
-    if not key or key != settings.BACKEND_API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+# API key dependency (header OR ?api_key=...). If BACKEND_API_KEY is unset, it's open.
+def require_api_key(
+    request: Request,
+    x_api_key: Optional[str] = Header(default=None, alias="x-api-key"),
+):
+    expected = (settings.BACKEND_API_KEY or "").strip()
+    if not expected:
+        return  # open mode
 
+    header_key = (
+        x_api_key
+        or request.headers.get("x-api-key")
+        or request.headers.get("X-API-Key")
+        or ""
+    ).strip()
+    if header_key == expected:
+        return
+
+    qp = (request.query_params.get("api_key") or "").strip()
+    if qp == expected:
+        return
+
+    _log_json(
+        "warning",
+        event="auth_denied",
+        reason="invalid_api_key",
+        request_id=REQUEST_ID.get(),
+        client_ip=(request.client.host if request.client else "unknown"),
+        path=request.url.path,
+    )
+    raise HTTPException(status_code=401, detail="Invalid API key")
 
 # per-IP sliding window limiter {ip -> deque[timestamps]}
 _ip_hits_read: dict[str, deque[float]] = defaultdict(deque)
 _ip_hits_mutate: dict[str, deque[float]] = defaultdict(deque)
-
 
 def _rate_limit(request: Request, bucket: dict[str, deque[float]], rate: int, window: float = 60.0):
     ip = request.client.host if request.client else "unknown"
@@ -155,19 +251,45 @@ def _rate_limit(request: Request, bucket: dict[str, deque[float]], rate: int, wi
     while dq and now - dq[0] > window:
         dq.popleft()
     if len(dq) >= rate:
+        _log_json(
+            "warning",
+            event="rate_limited",
+            request_id=REQUEST_ID.get(),
+            client_ip=ip,
+            path=request.url.path,
+            rate=rate,
+            window_sec=window,
+        )
         raise HTTPException(status_code=429, detail="Too many requests")
     dq.append(now)
-
 
 def rl_read_dep(request: Request):
     _rate_limit(request, _ip_hits_read, settings.RL_READ_RATE)
 
-
 def rl_mutate_dep(request: Request):
     _rate_limit(request, _ip_hits_mutate, settings.RL_MUTATE_RATE)
 
-# -------------------- Windows-safe IO helpers --------------------
+# --------- Bearer JWT helper (for user identity from proxy) ---------
+# Use this in routers to know "who" called you: current_user_email(request)
+import jwt  # PyJWT
 
+def current_user_email(request: Request) -> Optional[str]:
+    """Parse Authorization: Bearer <jwt> with APP_JWT_SECRET, return email or None."""
+    auth = request.headers.get("authorization") or request.headers.get("Authorization")
+    if not auth or not auth.lower().startswith("bearer "):
+        return None
+    token = auth.split(" ", 1)[1].strip()
+    secret = settings.APP_JWT_SECRET
+    if not secret:
+        return None
+    try:
+        payload = jwt.decode(token, secret, algorithms=["HS256"])
+        # we standardize on "email" claim
+        return payload.get("email") or payload.get("sub")
+    except Exception:
+        return None
+
+# -------------------- Windows-safe IO helpers --------------------
 ATTEMPTS_LOCK = threading.Lock()  # guard all writers
 
 def _parse_dt(val: Any) -> Optional[datetime]:
@@ -184,10 +306,6 @@ def _parse_dt(val: Any) -> Optional[datetime]:
     return None
 
 def _to_iso_z(val: Any) -> str:
-    """
-    Normalize any datetime/ISO-ish string to strict UTC with trailing 'Z'.
-    On failure, returns str(val).
-    """
     dt = _parse_dt(val)
     if dt is None:
         try:
@@ -201,9 +319,6 @@ def _to_iso_z(val: Any) -> str:
     return dt.isoformat().replace("+00:00", "Z")
 
 def _replace_with_retry(src: Path, dst: Path, attempts: int = 8, delay: float = 0.2) -> None:
-    """
-    Atomic replace with small exponential backoff for Windows file locks.
-    """
     for i in range(attempts):
         try:
             os.replace(src, dst)  # atomic on same volume
@@ -223,10 +338,6 @@ def _filtered_bank(role: str, difficulty: Optional[str]) -> List[Question]:
     return bank
 
 def _append_attempt_jsonl(a: Attempt) -> None:
-    """
-    Append one attempt to JSONL with normalized ISO UTC 'date'.
-    Writer is guarded by ATTEMPTS_LOCK.
-    """
     p = attempts_path()
     rec = a.model_dump()
     rec["date"] = _to_iso_z(rec.get("date", datetime.now(timezone.utc)))
@@ -234,7 +345,6 @@ def _append_attempt_jsonl(a: Attempt) -> None:
     with ATTEMPTS_LOCK:
         with p.open("a", encoding="utf-8", newline="\n") as f:
             f.write(body + "\n")
-            # optional: ensure durability after append
             f.flush()
             os.fsync(f.fileno())
 
@@ -258,12 +368,6 @@ def _read_attempts_jsonl(limit: int = 100, role: Optional[str] = None) -> List[A
     return out[::-1][:limit]  # most recent first
 
 def _rewrite_attempts_jsonl(transform: Callable[[dict], Optional[dict]]) -> int:
-    """
-    Read all attempts, call transform(rec_dict) -> rec_dict | None.
-    If transform returns None, the record is dropped.
-    Rewrites the file atomically; returns number of records written.
-    Guarded by ATTEMPTS_LOCK to avoid concurrent writers.
-    """
     p = attempts_path()
     if not p.exists():
         return 0
@@ -287,16 +391,12 @@ def _rewrite_attempts_jsonl(transform: Callable[[dict], Optional[dict]]) -> int:
                         new_rec["date"] = _to_iso_z(datetime.now(timezone.utc))
                     fout.write(json.dumps(new_rec, ensure_ascii=False, separators=(",", ":")) + "\n")
                     count += 1
-            # ensure data is on disk before replace (Windows safety)
             fout.flush()
             os.fsync(fout.fileno())
         _replace_with_retry(tmp, p)
     return count
 
 def _etag_json(request: Request, data: Any, max_age: int = 30) -> Response:
-    """
-    Return JSON with ETag/Cache-Control and support 304 revalidation.
-    """
     body = json.dumps(jsonable_encoder(data), separators=(",", ":"), default=str)
     etag = '"' + hashlib.sha1(body.encode("utf-8")).hexdigest() + '"'
     inm = request.headers.get("if-none-match")
@@ -305,22 +405,81 @@ def _etag_json(request: Request, data: Any, max_age: int = 30) -> Response:
         return Response(status_code=304, headers=headers)
     return Response(content=body, media_type="application/json", headers=headers)
 
+def _coerce_grouped_questions(raw: Any) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Accept either:
+      - grouped dict: { "Role": [ {..}, ... ], ... }
+      - legacy flat list: [ { role: "Role", ... }, ... ]
+    and return grouped dict with role filled.
+    """
+    if isinstance(raw, dict):
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for role, arr in raw.items():
+            bucket: List[Dict[str, Any]] = []
+            if isinstance(arr, list):
+                for it in arr:
+                    if not isinstance(it, dict):
+                        continue
+                    q = dict(it)
+                    q["role"] = role
+                    bucket.append(q)
+            grouped[str(role)] = bucket
+        return grouped
+
+    if isinstance(raw, list):
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for it in raw:
+            if not isinstance(it, dict):
+                continue
+            q = dict(it)
+            role = (q.get("role") or "Uncategorized")
+            q["role"] = role
+            grouped.setdefault(str(role), []).append(q)
+        return grouped
+
+    return {}
+
+
+def load_questions_from_disk() -> None:
+    """
+    Load questions from disk and tolerate both grouped and legacy flat shapes.
+    Keeps the in-memory QUESTIONS as {role: List[Question]}.
+    """
+    global QUESTIONS, QUESTIONS_MTIME
+    path = questions_path()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        QUESTIONS = {}
+        QUESTIONS_MTIME = 0.0
+        return
+
+    grouped = _coerce_grouped_questions(raw)
+    # Coerce each item into the Pydantic Question model
+    QUESTIONS = {
+        role: [Question(**q) for q in (arr or []) if isinstance(q, dict)]
+        for role, arr in grouped.items()
+    }
+    QUESTIONS_MTIME = path.stat().st_mtime
+
 # -------------------- Error handlers --------------------
 @app.exception_handler(ValidationError)
 async def on_validation_error(_: Request, exc: ValidationError):
-    return JSONResponse(
-        status_code=422,
-        content={"detail": exc.errors(), "message": "Validation failed"},
-    )
+    return JSONResponse(status_code=422, content={"detail": exc.errors(), "message": "Validation failed"})
 
 @app.exception_handler(Exception)
-async def on_unhandled(_: Request, exc: Exception):
+async def on_unhandled(request: Request, exc: Exception):
     if isinstance(exc, HTTPException):
+        # let FastAPI handle HTTPExceptions normally
         raise exc
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "Internal server error", "message": str(exc)},
+    _log_json(
+        "error",
+        event="unhandled_exception",
+        request_id=REQUEST_ID.get(),
+        path=str(request.url.path),
+        message=str(exc),
     )
+    return JSONResponse(status_code=500, content={"detail": "Internal server error", "message": str(exc)})
 
 # -------------------- Health --------------------
 @app.get("/health", tags=["health"])
@@ -489,14 +648,28 @@ def get_attempt_by_id(attempt_id: UUID):
     dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)],
 )
 def add_attempt(payload: AttemptCreate = Body(...)):
-    """Create a new attempt; server assigns id and default date if missing."""
-    if payload.role not in QUESTIONS:
+    """
+    Create a new attempt; server assigns id and default date if missing.
+    Additional guards:
+      - non-empty role (after trim)
+      - role must exist in current QUESTIONS bank
+      - difficulty, if present, must be one of easy|medium|hard
+      - duration_min enforced by Pydantic (1..240)
+    """
+    role = (payload.role or "").strip()
+    if not role:
+        # Will typically be caught by Pydantic 422, but keep explicit guard for clarity.
+        raise HTTPException(status_code=422, detail="Role is required")
+
+    if role not in QUESTIONS:
         raise HTTPException(status_code=400, detail="Unknown role")
+
     if payload.difficulty and payload.difficulty not in {"easy", "medium", "hard"}:
         raise HTTPException(status_code=400, detail="Invalid difficulty")
+
     attempt = Attempt(
         id=str(uuid.uuid4()),
-        role=payload.role,
+        role=role,
         score=payload.score,
         duration_min=payload.duration_min,
         date=payload.date or datetime.now(timezone.utc),  # timezone-aware UTC
@@ -603,6 +776,21 @@ def stats():
         "attempts_by_role": dict(by_role),
         "attempts_by_difficulty": dict(by_diff),
     }
+
+# -------------------- Auth / Password routers (existing) --------------------
+from app.routers import password
+from app.routers.auth import router as oauth_router
+from app.routers.local_auth import router as local_auth_router
+
+# Guard these with API key + mutate limiter
+app.include_router(password.router,    dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)])
+app.include_router(oauth_router,       dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)])
+app.include_router(local_auth_router,  dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)])
+
+# -------------------- Role/OAuth + Admin + Trainer routers (NEW) ------------
+# Protect them in the same way (API key + mutate limiter)
+app.include_router(admin_router,   dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)])
+app.include_router(trainer_router, dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)])
 
 # -------------------- Developer utilities --------------------
 @app.post(
