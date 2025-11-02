@@ -46,5 +46,13 @@
     "role": null,
     "provider": "local",
     "createdAt": 1760662529
+  },
+  "contactvishalsingh11@gmail.com": {
+    "id": "105533097027321565325",
+    "email": "contactvishalsingh11@gmail.com",
+    "name": "Vishal Kumar",
+    "role": null,
+    "provider": "google",
+    "createdAt": 1762080258
   }
 }

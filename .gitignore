@@ -94,3 +94,6 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+backend/app/data/analysis.jsonl
+backend/app/data/transcripts.jsonl

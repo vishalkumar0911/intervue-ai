@@ -18,6 +18,12 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Tuple, Optional
 from uuid import UUID
 
+# NEW: Added imports for AI/Audio features
+import mimetypes
+import openai
+from openai import OpenAI
+from pydantic import BaseModel
+
 from app.models import Question, AttemptCreate, Attempt, AttemptUpdate
 from fastapi import (
     Body,
@@ -28,6 +34,8 @@ from fastapi import (
     Query,
     Request,
     Response,
+    File,  # NEW
+    UploadFile,  # NEW
 )
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
@@ -64,6 +72,11 @@ class Settings(BaseSettings):
     RESET_TOKEN_EXPIRES_MIN: int = 30
     RESEND_API_KEY: Optional[str] = None
     EMAIL_FROM: Optional[str] = None
+    
+    # NEW: OpenAI settings
+    OPENAI_API_KEY: Optional[str] = None
+    OPENAI_TRANSCRIBE_MODEL: str = "whisper-1" # Note: feature branch had 'gpt-4o-transcribe', but 'whisper-1' is correct for transcriptions.
+    OPENAI_ANALYZE_MODEL: str = "gpt-4o-mini"
 
     # pydantic-settings v2 config
     model_config = SettingsConfigDict(
@@ -107,6 +120,9 @@ tags_metadata = [
     {"name": "stats", "description": "Aggregated statistics"},
     {"name": "auth", "description": "OAuth + password flows"},
     {"name": "dev", "description": "Developer utilities / seeders"},
+    # NEW: Added tags
+    {"name": "audio", "description": "Audio transcription"},
+    {"name": "analysis", "description": "Text analysis"},
 ]
 
 app = FastAPI(
@@ -183,6 +199,14 @@ def questions_path() -> Path:
 def attempts_path() -> Path:
     return Path(settings.ATTEMPTS_FILE).resolve() if settings.ATTEMPTS_FILE else (_root() / "data" / "attempts.jsonl").resolve()
 
+# NEW: Paths for audio/analysis data
+def transcripts_path() -> Path:
+    return (_root() / "data" / "transcripts.jsonl").resolve()
+
+def analysis_path() -> Path:
+    return (_root() / "data" / "analysis.jsonl").resolve()
+
+
 def file_size(path: Path) -> int:
     try:
         return path.stat().st_size
@@ -202,10 +226,11 @@ def hot_reload_if_changed() -> None:
 @app.on_event("startup")
 def startup() -> None:
     load_questions_from_disk()
-    p = attempts_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    if not p.exists():
-        p.touch()
+    # Ensure all data dirs/files exist
+    for p in [attempts_path(), transcripts_path(), analysis_path()]:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if not p.exists():
+            p.touch()
 
 # -------------------- Security & Rate limiting --------------------
 # API key dependency (header OR ?api_key=...). If BACKEND_API_KEY is unset, it's open.
@@ -327,6 +352,103 @@ def _replace_with_retry(src: Path, dst: Path, attempts: int = 8, delay: float = 
             time.sleep(delay * (i + 1))
     os.replace(src, dst)
 
+# NEW: sha helper
+def _sha(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+# -------------------- NEW: GPT helpers --------------------
+def _analyze_text_with_gpt(
+    client: OpenAI, model: str, text: str, context: str | None = None
+) -> dict:
+    system = (
+        "You are an ultra-concise analysis engine.\n"
+        "Task: extract concise keywords and key phrases, write a brief 1–2 sentence summary, "
+        "and rate how relevant TEXT is to the optional CONTEXT (0–100).\n"
+        "Output policy (STRICT):\n"
+        "- Keep everything short and to the point.\n"
+        "- keywords: up to 8 single words.\n"
+        "- key_phrases: up to 8 phrases, each ≤ 6 words.\n"
+        "- summary: ≤ 35 words.\n"
+        "- rationale: ≤ 40 words; explain the score briefly.\n"
+        "- JSON ONLY with keys: score, keywords, key_phrases, summary, rationale."
+    )
+
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": f"TEXT:\n{text}"},
+    ]
+    if context:
+        messages[1]["content"] += f"\n\nCONTEXT (optional):\n{context}"
+
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            response_format={"type": "json_object"},
+            temperature=0.0,
+        )
+        raw = resp.choices[0].message.content if resp.choices else "{}"
+        data = json.loads(raw or "{}")
+
+        return {
+            "score": int(max(0, min(100, int(data.get("score", 0))))),
+            "keywords": [k for k in (data.get("keywords") or []) if isinstance(k, str)][:8],
+            "key_phrases": [k for k in (data.get("key_phrases") or []) if isinstance(k, str)][:8],
+            "summary": str(data.get("summary", ""))[:400],
+            "rationale": str(data.get("rationale", ""))[:400],
+        }
+    except Exception as e:
+        return {
+            "score": 0,
+            "keywords": [],
+            "key_phrases": [],
+            "summary": "",
+            "rationale": f"Failed to get analysis: {e}",
+        }
+
+
+def _analyze_relevance_with_gpt(
+    client: OpenAI, model: str, question: str, answer: str
+) -> dict:
+    system = (
+        "You are a strict relevance judge. Score ONLY how relevant the ANSWER is to the QUESTION.\n"
+        "Ignore style/grammar/factual detail beyond topical fit.\n"
+        "Scoring: 0–100 (integers). 0 = totally irrelevant; 100 = perfectly addresses the question.\n"
+        "Be brief and to the point.\n"
+        "Output policy (STRICT):\n"
+        "- matched_points: up to 5 bullet fragments, each 2–6 words.\n"
+        "- missed_points: up to 5 bullet fragments, each 2–6 words.\n"
+        "- rationale: ≤ 35 words explaining the score.\n"
+        "- JSON ONLY with keys: relevance_score, matched_points, missed_points, rationale."
+    )
+
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": f"QUESTION:\n{question}\n\nANSWER:\n{answer}"},
+    ]
+
+    resp = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        response_format={"type": "json_object"},
+        temperature=0.0,
+    )
+    raw = resp.choices[0].message.content if resp.choices else "{}"
+    data = json.loads(raw or "{}")
+
+    try:
+        score = int(data.get("relevance_score", 0))
+    except Exception:
+        score = 0
+    score = max(0, min(100, score))
+
+    return {
+        "relevance_score": score,
+        "matched_points": [s for s in (data.get("matched_points") or []) if isinstance(s, str)][:5],
+        "missed_points": [s for s in (data.get("missed_points") or []) if isinstance(s, str)][:5],
+        "rationale": str(data.get("rationale", ""))[:300],
+    }
+
 # -------------------- Helpers --------------------
 def _filtered_bank(role: str, difficulty: Optional[str]) -> List[Question]:
     if role not in QUESTIONS:
@@ -404,6 +526,128 @@ def _etag_json(request: Request, data: Any, max_age: int = 30) -> Response:
     if inm == etag:
         return Response(status_code=304, headers=headers)
     return Response(content=body, media_type="application/json", headers=headers)
+
+# -------------------- NEW: Transcripts (JSONL) --------------------
+class Transcript(BaseModel):
+    id: str
+    filename: str
+    original_filename: str
+    content_type: str
+    size_bytes: int
+    transcript: str
+    created: datetime
+    question_id: Optional[str] = None
+
+
+TRANSCRIPTS_LOCK = threading.Lock()
+
+
+def _append_transcript_jsonl(t: Transcript) -> None:
+    p = transcripts_path()
+    rec = t.model_dump()
+    rec["created"] = _to_iso_z(rec["created"])
+    body = json.dumps(rec, ensure_ascii=False, separators=(",", ":"))
+    with TRANSCRIPTS_LOCK:
+        with p.open("a", encoding="utf-8", newline="\n") as f:
+            f.write(body + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+
+
+def _read_transcripts_jsonl(limit: int = 500) -> List[Transcript]:
+    p = transcripts_path()
+    out: List[Transcript] = []
+    if not p.exists():
+        return out
+    with p.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+                out.append(
+                    Transcript(
+                        id=rec.get("id", ""),
+                        filename=rec.get("filename", ""),
+                        original_filename=rec.get("original_filename", ""),
+                        content_type=rec.get("content_type", ""),
+                        size_bytes=rec.get("size_bytes", 0),
+                        transcript=rec.get("transcript", ""),
+                        created=_parse_dt(rec.get("created"))
+                        or datetime.now(timezone.utc),
+                        question_id=rec.get("question_id"),
+                    )
+                )
+            except Exception:
+                continue
+    return out[::-1][:limit]
+
+
+# -------------------- NEW: Analysis (JSONL) --------------------
+class AnalysisRecord(BaseModel):
+    id: str
+    session_id: str
+    text_hash: str
+    model: str
+    score: int
+    keywords: list[str]
+    key_phrases: list[str]
+    summary: str
+    rationale: str
+    created: datetime
+
+
+ANALYSIS_LOCK = threading.Lock()
+
+
+def _append_analysis_jsonl(a: AnalysisRecord) -> None:
+    p = analysis_path()
+    rec = a.model_dump()
+    rec["created"] = _to_iso_z(rec["created"])
+    body = json.dumps(rec, ensure_ascii=False, separators=(",", ":"))
+    with ANALYSIS_LOCK:
+        with p.open("a", encoding="utf-8", newline="\n") as f:
+            f.write(body + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+
+
+def _read_analysis_jsonl(
+    limit: int = 500, session_id: str | None = None
+) -> list[AnalysisRecord]:
+    p = analysis_path()
+    out: list[AnalysisRecord] = []
+    if not p.exists():
+        return out
+    with p.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+                if session_id and rec.get("session_id") != session_id:
+                    continue
+                out.append(
+                    AnalysisRecord(
+                        id=rec.get("id", ""),
+                        session_id=rec.get("session_id", ""),
+                        text_hash=rec.get("text_hash", ""),
+                        model=rec.get("model", ""),
+                        score=int(rec.get("score", 0)),
+                        keywords=rec.get("keywords", []) or [],
+                        key_phrases=rec.get("key_phrases", []) or [],
+                        summary=rec.get("summary", ""),
+                        rationale=rec.get("rationale", ""),
+                        created=_parse_dt(rec.get("created"))
+                        or datetime.now(timezone.utc),
+                    )
+                )
+            except Exception:
+                continue
+    return out[::-1][:limit]
+
 
 def _coerce_grouped_questions(raw: Any) -> Dict[str, List[Dict[str, Any]]]:
     """
@@ -748,6 +992,185 @@ def update_attempt(attempt_id: UUID, patch: AttemptUpdate):
         raise HTTPException(status_code=404, detail="Attempt not found")
     return updated
 
+# -------------------- NEW: Transcripts Endpoints --------------------
+@app.get(
+    "/transcripts",
+    response_model=List[Transcript],
+    tags=["audio"],
+    dependencies=[Depends(rl_read_dep)],
+)
+def list_transcripts(limit: int = Query(100, ge=1, le=1000)):
+    return _read_transcripts_jsonl(limit=limit)
+
+
+@app.get(
+    "/transcripts/{tid}",
+    response_model=Transcript,
+    tags=["audio"],
+    dependencies=[Depends(rl_read_dep)],
+)
+def get_transcript(tid: str):
+    items = _read_transcripts_jsonl(limit=10_000)
+    for t in items:
+        if t.id == tid:
+            return t
+    raise HTTPException(status_code=404, detail="Transcript not found")
+
+
+# -------------------- NEW: Analysis Endpoints --------------------
+class AnalyzeIn(BaseModel):
+    text: str
+    context: str | None = None
+    session_id: str | None = None
+    model: str | None = None
+
+
+@app.post(
+    "/api/analyze",
+    tags=["analysis"],
+    dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)],
+)
+def api_analyze(payload: AnalyzeIn):
+    if not payload.text or not payload.text.strip():
+        raise HTTPException(status_code=400, detail="Missing 'text'")
+
+    api_key = (settings.OPENAI_API_KEY or "").strip()
+    if not api_key:
+        raise HTTPException(
+            status_code=500, detail="OPENAI_API_KEY is missing on the server"
+        )
+
+    analyze_model = (
+        payload.model
+        or settings.OPENAI_ANALYZE_MODEL
+        or "gpt-4o-mini"
+    ).strip()
+    client = OpenAI(api_key=api_key)
+
+    data = _analyze_text_with_gpt(
+        client, analyze_model, payload.text, payload.context
+    )
+
+    aid = str(uuid.uuid4())
+    rec = AnalysisRecord(
+        id=aid,
+        session_id=payload.session_id or "default",
+        text_hash=_sha(payload.text),
+        model=analyze_model,
+        score=int(data["score"]),
+        keywords=data["keywords"],
+        key_phrases=data["key_phrases"],
+        summary=data["summary"],          # concise summary
+        rationale=data["rationale"],      # concise rationale for score
+        created=datetime.now(timezone.utc),
+    )
+    _append_analysis_jsonl(rec)
+
+    return {
+        "ok": True,
+        "id": aid,
+        "session_id": rec.session_id,
+        "score": rec.score,
+        "keywords": rec.keywords,
+        "key_phrases": rec.key_phrases,
+        "summary": rec.summary,
+        "rationale": rec.rationale,
+        "model": rec.model,
+        "created": _to_iso_z(rec.created),
+    }
+
+
+@app.get(
+    "/analysis",
+    response_model=List[AnalysisRecord],
+    tags=["analysis"],
+    dependencies=[Depends(rl_read_dep)],
+)
+def list_analysis(limit: int = Query(100, ge=1, le=1000), session_id: str | None = None):
+    return _read_analysis_jsonl(limit=limit, session_id=session_id)
+
+
+@app.get(
+    "/analysis/{aid}",
+    response_model=AnalysisRecord,
+    tags=["analysis"],
+    dependencies=[Depends(rl_read_dep)],
+)
+def get_analysis(aid: str):
+    items = _read_analysis_jsonl(limit=10_000)
+    for i in items:
+        if i.id == aid:
+            return i
+    raise HTTPException(status_code=404, detail="Analysis not found")
+
+
+# -------------------- NEW: Content Analysis (strict relevance) --------------------
+class ContentAnalyzeRequest(BaseModel):
+    question: str
+    answer_transcript: str
+    session_id: str | None = None
+    model: str | None = None
+
+
+@app.post(
+    "/api/analyze_content",
+    tags=["analysis"],
+    dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)],
+)
+def api_analyze_content(payload: ContentAnalyzeRequest):
+    q = (payload.question or "").strip()
+    a = (payload.answer_transcript or "").strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="Missing 'question'")
+    if not a:
+        raise HTTPException(status_code=400, detail="Missing 'answer_transcript'")
+
+    api_key = (settings.OPENAI_API_KEY or "").strip()
+    if not api_key:
+        raise HTTPException(
+            status_code=500, detail="OPENAI_API_KEY is missing on the server"
+        )
+    analyze_model = (
+        payload.model
+        or settings.OPENAI_ANALYZE_MODEL
+        or "gpt-4o-mini"
+    ).strip()
+
+    client = OpenAI(api_key=api_key)
+
+    try:
+        data = _analyze_relevance_with_gpt(client, analyze_model, q, a)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Analysis failed: {e}")
+
+    # Persist as AnalysisRecord; reuse 'score' for relevance_score
+    aid = str(uuid.uuid4())
+    rec = AnalysisRecord(
+        id=aid,
+        session_id=payload.session_id or "default",
+        text_hash=_sha(q + "\n" + a),
+        model=analyze_model,
+        score=int(data["relevance_score"]),
+        keywords=[],
+        key_phrases=[],
+        summary=data["rationale"],  # brief reasoning stored as summary
+        rationale="; ".join(data["matched_points"] + data["missed_points"])[:4000],
+        created=datetime.now(timezone.utc),
+    )
+    _append_analysis_jsonl(rec)
+
+    return {
+        "ok": True,
+        "id": aid,
+        "session_id": rec.session_id,
+        "model": analyze_model,
+        "relevance_score": data["relevance_score"],
+        "matched_points": data["matched_points"],
+        "missed_points": data["missed_points"],
+        "rationale": data["rationale"],   # short, to the point
+        "created": _to_iso_z(rec.created),
+    }
+
 # -------------------- Stats --------------------
 @app.get("/stats", tags=["stats"], dependencies=[Depends(rl_read_dep)])
 def stats():
@@ -775,6 +1198,99 @@ def stats():
         "attempts_total": attempts_total,
         "attempts_by_role": dict(by_role),
         "attempts_by_difficulty": dict(by_diff),
+    }
+
+# -------------------- NEW: Audio / Transcription --------------------
+@app.post(
+    "/api/transcribe",
+    tags=["audio"],
+    dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)],
+)
+async def api_transcribe(request: Request, file: UploadFile = File(...)):
+    if not file.content_type or not file.content_type.startswith("audio/"):
+        raise HTTPException(
+            status_code=400, detail=f"File must be audio/*, got {file.content_type!r}"
+        )
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty upload")
+
+    uploads_dir = _root() / "data" / "uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = Path(file.filename or "").suffix
+    if not ext:
+        ext = mimetypes.guess_extension(file.content_type or "") or ".bin"
+
+    fname = (
+        f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex}{ext}"
+    )
+    out_path = uploads_dir / fname
+    with out_path.open("wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+
+    api_key = (settings.OPENAI_API_KEY or "").strip()
+    if not api_key:
+        raise HTTPException(
+            status_code=500, detail="OPENAI_API_KEY is missing on the server"
+        )
+
+    model = (settings.OPENAI_TRANSCRIBE_MODEL or "whisper-1").strip()
+
+    buf = io.BytesIO(data)
+    buf.name = file.filename or f"audio{ext}"
+
+    try:
+        client = OpenAI(api_key=api_key)
+        result = client.audio.transcriptions.create(
+            model=model,
+            file=buf,
+        )
+        transcript_text = getattr(result, "text", "") or ""
+    except openai.AuthenticationError as e:
+        raise HTTPException(status_code=500, detail=f"OpenAI auth failed: {e}") from e
+    except openai.RateLimitError as e:
+        msg = getattr(e, "message", str(e))
+        if "insufficient_quota" in msg or "quota" in msg.lower():
+            raise HTTPException(
+                status_code=429, detail=f"OpenAI quota exceeded: {msg}"
+            )
+        raise HTTPException(status_code=429, detail=f"OpenAI rate limit: {msg}")
+    except openai.APIConnectionError as e:
+        raise HTTPException(
+            status_code=502, detail=f"OpenAI connection error: {e}"
+        ) from e
+    except openai.APIError as e:
+        raise HTTPException(status_code=502, detail=f"OpenAI API error: {e}") from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"OpenAI transcription failed: {e}"
+        ) from e
+
+    tid = str(uuid.uuid4())
+    _append_transcript_jsonl(
+        Transcript(
+            id=tid,
+            filename=fname,
+            original_filename=(getattr(file, "filename", None) or fname),
+            content_type=(getattr(file, "content_type", None) or "audio/*"),
+            size_bytes=len(data),
+            transcript=transcript_text,
+            created=datetime.now(timezone.utc),
+            question_id=request.query_params.get("question_id"),
+        )
+    )
+
+    return {
+        "ok": True,
+        "id": tid,
+        "filename": fname,
+        "size_bytes": len(data),
+        "content_type": file.content_type,
+        "transcript": transcript_text,
     }
 
 # -------------------- Auth / Password routers (existing) --------------------

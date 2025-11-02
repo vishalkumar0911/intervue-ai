@@ -18,6 +18,8 @@ import Link from "next/link";
 import { Textarea } from "@/components/ui/Textarea";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
+// NEW: Import the AudioRecorder
+import AudioRecorder from "@/components/AudioRecorder";
 import RoleSelect from "@/components/RoleSelect";
 import DifficultySelect from "@/components/DifficultySelect";
 import ShuffleToggle from "@/components/ShuffleToggle";
@@ -50,8 +52,24 @@ type Prefs = {
   qSecs?: 0 | 15 | 30 | 60;
 };
 
+// NEW: Type definition for analysis results
+type AnalysisResult = {
+  ok?: boolean;
+  id?: string;
+  session_id?: string;
+  model?: string;
+  created?: string;
+
+  // fields used by the UI
+  score: number;               // 0..100
+  keywords: string[];
+  key_phrases: string[];
+  summary?: string;
+  rationale?: string;
+};
+
 export default function InterviewPage() {
-  const { user, loading } = useAuth();
+  const { user, loading: authLoading } = useAuth(); // Renamed to avoid conflict
   const isPrivileged = user?.role === "Trainer" || user?.role === "Admin";
 
   const router = useRouter();
@@ -68,6 +86,8 @@ export default function InterviewPage() {
   const shuffle = useInterviewStore((s) => s.shuffle);
   const bank = useInterviewStore((s) => s.bank);
   const index = useInterviewStore((s) => s.index);
+  // NEW: Renamed loading to avoid conflict with authLoading
+  const loading = useInterviewStore((s) => s.loading);
   const error = useInterviewStore((s) => s.error);
 
   const setRole = useInterviewStore((s) => s.setRole);
@@ -98,10 +118,10 @@ export default function InterviewPage() {
   }, []);
 
   useEffect(() => {
-    if (!loading && user && needsRoleOnboarding(user)) {
+    if (!authLoading && user && needsRoleOnboarding(user)) {
       router.replace("/onboarding?next=/interview");
     }
-  }, [loading, user, router]);
+  }, [authLoading, user, router]);
 
   // Allow deep link role override
   useEffect(() => {
@@ -293,6 +313,21 @@ export default function InterviewPage() {
   // ---------- Complete/Save flow ----------
   const [completeOpen, setCompleteOpen] = useState(false);
   const [score, setScore] = useState(75);
+  
+  // NEW: === Transcript & Analysis state ===
+  const [lastTranscript, setLastTranscript] = useState<string | null>(null);
+  const [lastMeta, setLastMeta] = useState<{ filename?: string; size_bytes?: number; content_type?: string } | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
+
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [sessionId] = useState(() => crypto.randomUUID());
+
+  // Optional: pass a question/rubric to improve the relevance score
+  const [context, setContext] = useState("");
+  
   const tryPrev = () => {
     cancelSpeech();
     setIndex((index - 1 + bank.length) % bank.length);
@@ -325,6 +360,65 @@ export default function InterviewPage() {
       resetStore();
       router.push("/dashboard");
     } catch { toast.error("Failed to save session"); }
+  }
+
+  // NEW: Handler for audio upload
+  async function sendRecordingToBackend(file: File) {
+    setUploadError(null);
+    setLastTranscript(null);
+    setAnalysis(null); // clear any previous analysis when uploading a new answer
+
+    const form = new FormData();
+    form.append("file", file, file.name);
+
+    // Call your Next.js route handler (server proxy) — no headers here
+    const res = await fetch("/api/transcribe", { method: "POST", body: form });
+
+    if (!res.ok) {
+      const text = await res.text();
+      setUploadError(`Upload failed (${res.status}): ${text}`);
+      throw new Error(`Upload failed (${res.status}): ${text}`);
+    }
+
+    const json = await res.json();
+    // Expecting { transcript, filename, size_bytes, content_type, id? }
+    setLastTranscript(json?.transcript || "");
+    setLastMeta({
+      filename: json?.filename,
+      size_bytes: json?.size_bytes,
+      content_type: json?.content_type,
+    });
+    return json;
+  }
+
+  // NEW: Handler for analysis
+  async function analyzeTranscript() {
+    if (!lastTranscript) return;
+    setAnalyzing(true);
+    setAnalysisError(null);
+    setAnalysis(null);
+    try {
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          text: lastTranscript,
+          context,            // optional rubric/question
+          session_id: sessionId,
+        }),
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(`Analyze failed (${res.status}): ${t}`);
+      }
+      const json = await res.json();
+      setAnalysis(json);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setAnalysisError(msg || "Analyze failed");
+    } finally {
+      setAnalyzing(false);
+    }
   }
 
   function copyQuestion() {
@@ -436,7 +530,7 @@ export default function InterviewPage() {
           {error && (
             <div
               className="mt-4 flex items-center gap-3 rounded-2xl border p-4 text-sm
-                         border-destructive/40 bg-destructive/10 text-destructive-foreground"
+                       border-destructive/40 bg-destructive/10 text-destructive-foreground"
               role="alert"
             >
               <Info className="h-4 w-4" />
@@ -553,6 +647,15 @@ export default function InterviewPage() {
                       <span className="text-xs">{bookmarked ? "Bookmarked" : "Bookmark"}</span>
                     </button>
                   </div>
+
+                  {/* NEW: ---- Audio practice & recording ---- */}
+                  <div className="mt-4 min-w-0">
+                    <AudioRecorder
+                      filename={`answer-${current?.id || "untitled"}`}
+                      onRecordingComplete={sendRecordingToBackend}
+                    />
+                  </div>
+                  {/* ---- end recorder block ---- */}
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
@@ -639,6 +742,105 @@ export default function InterviewPage() {
 
                 </div>
               )}
+
+              {/* NEW: ---- Transcript & Analysis UI ---- */}
+              {uploadError && (
+                <div className="mt-4 rounded border border-red-300 bg-red-50 p-3 text-sm text-red-700 break-words">
+                  {uploadError}
+                </div>
+              )}
+
+              {lastTranscript !== null && (
+                <div className="surface p-4 mt-2 space-y-3">
+                  <div className="mb-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                    <span>Latest transcript</span>
+                    {lastMeta && (
+                      <span className="rounded bg-muted px-2 py-0.5 text-xs break-all">
+                        {lastMeta.filename} • {lastMeta.content_type} • {Math.round(((lastMeta.size_bytes || 0) / 1024) * 10) / 10} KB
+                      </span>
+                    )}
+                  </div>
+
+                  {/* transcript text */}
+                  <Textarea
+                    defaultValue={lastTranscript || ""}
+                    className="min-h-[160px] w-full"
+                    aria-label="Transcript"
+                  />
+
+                  {/* optional: context/rubric to improve relevance scoring */}
+                  <input
+                    value={context}
+                    onChange={(e) => setContext(e.target.value)}
+                    placeholder="Optional: paste the question or rubric for relevance scoring"
+                    className="mt-2 w-full rounded border px-3 py-2 text-sm"
+                    aria-label="Analysis context"
+                  />
+
+                  {/* analyze button + error */}
+                  <div className="flex flex-wrap items-center gap-3 mt-1">
+                    <button
+                      onClick={analyzeTranscript}
+                      disabled={analyzing || !lastTranscript}
+                      className="rounded-lg border px-3 py-2 text-sm hover:bg-muted disabled:opacity-50 whitespace-nowrap"
+                    >
+                      {analyzing ? "Analyzing…" : "Analyze with GPT-4"}
+                    </button>
+                    {analysisError && <span className="text-sm text-red-600 break-words">{analysisError}</span>}
+                  </div>
+
+                  {/* analysis results */}
+                  {analysis && (
+                    <div className="rounded-lg border p-3 mt-2 overflow-hidden">
+                      <div className="mb-2 flex flex-wrap items-center gap-2">
+                        <span className="text-sm text-muted-foreground">Relevance score</span>
+                        <span className="rounded bg-muted px-2 py-0.5 text-xs">{analysis.score}/100</span>
+                      </div>
+
+                      <div className="w-full h-2 bg-muted rounded">
+                        <div
+                          className="h-2 rounded bg-blue-500"
+                          style={{ width: `${Math.max(0, Math.min(100, analysis.score || 0))}%` }}
+                        />
+                      </div>
+
+                      <div className="mt-3 grid gap-3 md:grid-cols-2">
+                        <div>
+                          <div className="text-sm font-medium mb-1">Keywords</div>
+                          <div className="flex flex-wrap gap-2">
+                            {(analysis.keywords || []).map((k: string) => (
+                              <span key={k} className="rounded bg-muted px-2 py-0.5 text-xs break-words">{k}</span>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-sm font-medium mb-1">Key phrases</div>
+                          <div className="flex flex-wrap gap-2">
+                            {(analysis.key_phrases || []).map((k: string) => (
+                              <span key={k} className="rounded bg-muted px-2 py-0.5 text-xs break-words">{k}</span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      {analysis.summary && (
+                        <div className="mt-3">
+                          <div className="text-sm font-medium mb-1">Summary</div>
+                          <p className="text-sm leading-6 break-words">{analysis.summary}</p>
+                        </div>
+                      )}
+
+                      {analysis.rationale && (
+                        <details className="mt-3">
+                          <summary className="cursor-pointer text-sm text-muted-foreground">Model rationale</summary>
+                          <p className="mt-2 text-sm leading-6 whitespace-pre-wrap break-words">{analysis.rationale}</p>
+                        </details>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* ---- end transcript & analysis UI ---- */}
 
               {/* complete/save panel */}
               {completeOpen && (

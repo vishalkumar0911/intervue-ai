@@ -65,9 +65,9 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 
   const value: SidebarContextType = {
     collapsed,
-    setCollapsed,          // ✅
+    setCollapsed,        // ✅
     open,
-    setOpen,               // ✅
+    setOpen,             // ✅
     toggle: () => setOpen((v) => !v),
     collapse: () => setCollapsed(true),
     expand: () => setCollapsed(false),
