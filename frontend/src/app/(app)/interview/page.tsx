@@ -34,7 +34,6 @@ import {
 import { getNote, setNote, exportNotesCSV } from "@/lib/notes";
 import RequireRole from "@/components/auth/RequireRole";
 
-
 /* ---------- small utils ---------- */
 function pad(n: number) { return n < 10 ? `0${n}` : String(n); }
 function fmtMMSS(ms: number) {
@@ -51,20 +50,6 @@ type Prefs = {
   shuffle?: boolean;
   tts?: boolean;
   qSecs?: 0 | 15 | 30 | 60;
-};
-type AnalysisResult = {
-  ok?: boolean;
-  id?: string;
-  session_id?: string;
-  model?: string;
-  created?: string;
-
-  // fields used by the UI
-  score: number;               // 0..100
-  keywords: string[];
-  key_phrases: string[];
-  summary?: string;
-  rationale?: string;
 };
 
 // NEW: Type definition for analysis results
@@ -328,12 +313,8 @@ export default function InterviewPage() {
   // ---------- Complete/Save flow ----------
   const [completeOpen, setCompleteOpen] = useState(false);
   const [score, setScore] = useState(75);
-<<<<<<< HEAD
   
   // NEW: === Transcript & Analysis state ===
-=======
-  // === Transcript & Analysis state ===
->>>>>>> feature/analytics
   const [lastTranscript, setLastTranscript] = useState<string | null>(null);
   const [lastMeta, setLastMeta] = useState<{ filename?: string; size_bytes?: number; content_type?: string } | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -346,11 +327,7 @@ export default function InterviewPage() {
 
   // Optional: pass a question/rubric to improve the relevance score
   const [context, setContext] = useState("");
-<<<<<<< HEAD
   
-=======
-
->>>>>>> feature/analytics
   const tryPrev = () => {
     cancelSpeech();
     setIndex((index - 1 + bank.length) % bank.length);
@@ -385,10 +362,7 @@ export default function InterviewPage() {
     } catch { toast.error("Failed to save session"); }
   }
 
-<<<<<<< HEAD
   // NEW: Handler for audio upload
-=======
->>>>>>> feature/analytics
   async function sendRecordingToBackend(file: File) {
     setUploadError(null);
     setLastTranscript(null);
@@ -417,10 +391,7 @@ export default function InterviewPage() {
     return json;
   }
 
-<<<<<<< HEAD
   // NEW: Handler for analysis
-=======
->>>>>>> feature/analytics
   async function analyzeTranscript() {
     if (!lastTranscript) return;
     setAnalyzing(true);
@@ -461,10 +432,8 @@ export default function InterviewPage() {
     setPrefs((p) => ({ ...p, qSecs: sec }));
     endRef.current = sec ? Date.now() + sec * 1000 : null;
   }
-  // NOTE: removed manual DOM width tweaker; Tailwind + style handles progress width.
 
   return (
-<<<<<<< HEAD
     <RequireRole roles={["Student"]} mode="redirect">
       <main className="min-h-screen">
         <section className="mx-auto max-w-5xl px-4 py-10 md:py-14">
@@ -472,43 +441,17 @@ export default function InterviewPage() {
             <Sparkles className="h-5 w-5 text-accent-400" />
             <h1 className="text-2xl font-semibold text-foreground">Mock Interview</h1>
           </div>
-=======
-    <main className="min-h-screen overflow-x-hidden">
-      <section className="mx-auto max-w-5xl px-4 py-10 md:py-14">
-        <div className="mb-6 flex flex-wrap items-center gap-2">
-          <Sparkles className="h-5 w-5 shrink-0 text-accent-400" />
-          <h1 className="text-2xl font-semibold text-foreground">Mock Interview</h1>
-        </div>
->>>>>>> feature/analytics
 
           <p className="text-sm text-muted-foreground">
             Pick a role, tweak difficulty, and practice. Your questions load from your local API.
           </p>
 
-<<<<<<< HEAD
           {/* controls bar */}
           <div className="mt-6 grid gap-4 md:grid-cols-[2fr_1fr_auto]">
-=======
-        {/* controls bar - responsive, no overflow */}
-        <div className="mt-6 flex flex-wrap items-end gap-4">
-          <div className="flex-[2_1_16rem] min-w-[240px] min-h-[40px]">
->>>>>>> feature/analytics
             <RoleSelect
               roles={roles}
               value={role}
               onChange={(r) => { setRole(r); toast.success(`Role: ${r}`); }}
-<<<<<<< HEAD
-=======
-            />
-          </div>
-          <div className="flex-[1_1_12rem] min-w-[180px] min-h-[40px]">
-            <DifficultySelect value={difficulty as Difficulty} onChange={setDifficulty} />
-          </div>
-          <div className="flex-[0_0_auto] min-h-[40px]">
-            <ShuffleToggle
-              checked={shuffle}
-              onChange={(v) => { setShuffle(v); toast.message(v ? "Shuffle on" : "Shuffle off"); }}
->>>>>>> feature/analytics
             />
             <DifficultySelect value={difficulty as Difficulty} onChange={setDifficulty} />
             <div className="flex items-end">
@@ -519,7 +462,6 @@ export default function InterviewPage() {
             </div>
           </div>
 
-<<<<<<< HEAD
           {/* secondary toolbar */}
           <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
             <button
@@ -556,48 +498,9 @@ export default function InterviewPage() {
             >
               <StickyNote className="h-4 w-4" /> Notes
             </button>
-=======
-        {/* secondary toolbar */}
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
-          <button
-            onClick={() => {
-              const on = !prefs.tts;
-              setPrefs((p) => ({ ...p, tts: on }));
-              if (on && current?.text) speak(current.text);
-              if (!on) cancelSpeech();
-            }}
-            className={[
-              "inline-flex items-center gap-2 rounded-lg px-3 py-1.5 focus-ring whitespace-nowrap",
-              prefs.tts
-                ? "bg-brand-500/15 text-foreground ring-1 ring-brand-500/30"
-                : "bg-secondary text-foreground/80 hover:bg-secondary/80 border border-border"
-            ].join(" ")}
-            title="Toggle speech"
-          >
-            {prefs.tts ? <Volume2 className="h-4 w-4 shrink-0" /> : <VolumeX className="h-4 w-4 shrink-0" />}
-            Speak
-          </button>
-
-          <button
-            onClick={copyQuestion}
-            className="inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-1.5 text-foreground/80 hover:bg-secondary/80 focus-ring whitespace-nowrap"
-            title="Copy question"
-          >
-            <Copy className="h-4 w-4 shrink-0" />Copy Ques.
-          </button>
-
-          <button
-            onClick={() => setNotesOpen((v) => !v)}
-            className="inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-1.5 text-foreground/80 hover:bg-secondary/80 focus-ring whitespace-nowrap"
-            title="Notes"
-          >
-            <StickyNote className="h-4 w-4 shrink-0" /> Notes
-          </button>
->>>>>>> feature/analytics
 
             <div className="mx-2 h-4 w-px bg-border" />
 
-<<<<<<< HEAD
             <div className="inline-flex items-center gap-1">
               <Timer className="h-4 w-4 opacity-80" />
               <span className="text-muted-foreground">Auto-next:</span>
@@ -621,33 +524,8 @@ export default function InterviewPage() {
                 </span>
               ) : null}
             </div>
-=======
-          <div className="inline-flex flex-wrap items-center gap-1">
-            <Timer className="h-4 w-4 opacity-80 shrink-0" />
-            <span className="text-muted-foreground">Auto-next:</span>
-            {([0, 15, 30, 60] as const).map((sec) => (
-              <button
-                key={sec}
-                onClick={() => setCountdown(sec)}
-                className={[
-                  "rounded-lg border px-2 py-1 text-xs focus-ring whitespace-nowrap",
-                  prefs.qSecs === sec
-                    ? "border-brand-500/30 bg-brand-500/15 text-foreground"
-                    : "border-border bg-secondary text-foreground/80 hover:bg-secondary/80",
-                ].join(" ")}
-              >
-                {sec === 0 ? "off" : `${sec}s`}
-              </button>
-            ))}
-            {prefs.qSecs ? (
-              <span className="ml-2 rounded-md bg-muted px-2 py-0.5 text-xs text-foreground/80">
-                {fmtMMSS(remaining)}
-              </span>
-            ) : null}
->>>>>>> feature/analytics
           </div>
 
-<<<<<<< HEAD
           {/* errors */}
           {error && (
             <div
@@ -657,38 +535,11 @@ export default function InterviewPage() {
             >
               <Info className="h-4 w-4" />
               <span>{error}</span>
-=======
-        {/* errors */}
-        {error && (
-          <div
-            className="mt-4 flex flex-wrap items-center gap-3 rounded-2xl border p-4 text-sm
-                       border-destructive/40 bg-destructive/10 text-destructive-foreground"
-            role="alert"
-          >
-            <Info className="h-4 w-4 shrink-0" />
-            <span className="min-w-0 break-words">{error}</span>
-          </div>
-        )}
-
-        {!role && (
-          <Card>
-            <div className="flex items-start gap-3">
-              <Keyboard className="h-5 w-5 text-brand-500 shrink-0 mt-0.5" />
-              <div className="min-w-0">
-                <p className="font-medium text-foreground">Choose a role to begin</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Tip: use <kbd className="rounded bg-muted px-1">P</kbd> /
-                  <kbd className="rounded bg-muted px-1">N</kbd> or
-                  <kbd className="rounded bg-muted px-1">←</kbd>
-                  <kbd className="rounded bg-muted px-1">→</kbd> to switch.
-                </p>
-              </div>
->>>>>>> feature/analytics
             </div>
           )}
 
           {!role && (
-            <Card>
+            <Card className="mt-4">
               <div className="flex items-start gap-3">
                 <Keyboard className="h-5 w-5 text-brand-500 shrink-0 mt-0.5" />
                 <div>
@@ -704,7 +555,6 @@ export default function InterviewPage() {
             </Card>
           )}
 
-<<<<<<< HEAD
           {/* >>> Enhanced empty-state (role-aware) <<< */}
           {!loading && role && bank.length === 0 && (
             <Card className="mt-4">
@@ -721,39 +571,6 @@ export default function InterviewPage() {
                         <Button>Go to Trainer Questions</Button>
                       </Link>
                     </div>
-=======
-        {role && (
-          <div className="card p-6 mt-6">
-            <div className="flex flex-col gap-4">
-              <div className="min-w-0 flex-1">
-                <p
-                  aria-live="polite"
-                  className="text-xs uppercase tracking-wide text-brand-700/80 dark:text-brand-300/80"
-                >
-                  Question {bank.length ? index + 1 : 0}{bank.length ? ` of ${bank.length}` : ""}
-                </p>
-
-                <div className="mt-1 min-h-[92px] md:min-h-[112px] lg:min-h-[124px] flex items-start">
-                  <div aria-live="polite" aria-atomic="true" className="w-full min-w-0">
-                    <AnimatePresence mode="wait">
-                      <motion.h3
-                        key={bank.length ? (bank[index]?.id ?? index) : "empty"}
-                        initial={{ opacity: 0, y: 6 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -6 }}
-                        transition={{ duration: 0.18 }}
-                        className="text-2xl md:text-3xl font-semibold tracking-tight leading-tight text-foreground break-words hyphens-auto max-w-full"
-                      >
-                        {loading ? (
-                          <span className="inline-flex items-center gap-2 text-muted-foreground">
-                            <Loader2 className="h-4 w-4 animate-spin shrink-0" /> Loading…
-                          </span>
-                        ) : (
-                          current?.text ?? "No questions."
-                        )}
-                      </motion.h3>
-                    </AnimatePresence>
->>>>>>> feature/analytics
                   </div>
                 </div>
               ) : (
@@ -772,7 +589,6 @@ export default function InterviewPage() {
             </Card>
           )}
 
-<<<<<<< HEAD
           {role && (
             <div className="card p-6 mt-6">
               <div className="flex items-start justify-between gap-4">
@@ -916,125 +732,11 @@ export default function InterviewPage() {
               {/* notes panel */}
               {notesOpen && current?.id && (
                 <div className="surface p-4 mt-4">
-=======
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  {current?.topic && <Badge variant="neutral">Topic: {current.topic}</Badge>}
-                  {current?.difficulty && (
-                    <span
-                      className={[
-                        "inline-flex items-center rounded-xl px-2.5 py-1 text-xs ring-1 ring-border",
-                        current.difficulty === "easy" && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-200",
-                        current.difficulty === "medium" && "bg-amber-500/10 text-amber-700 dark:text-amber-200",
-                        current.difficulty === "hard" && "bg-rose-500/10 text-rose-700 dark:text-rose-200",
-                      ].join(" ")}
-                    >
-                      Difficulty: {current.difficulty}
-                    </span>
-                  )}
-
-                  <button
-                    onClick={toggleBookmark}
-                    className="ml-2 inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-2 py-1 text-foreground/80 hover:bg-secondary/80 focus-ring whitespace-nowrap"
-                    title={bookmarked ? "Remove bookmark" : "Bookmark this question"}
-                  >
-                    {bookmarked ? <Star className="h-4 w-4 text-yellow-500 shrink-0" /> : <StarOff className="h-4 w-4 shrink-0" />}
-                    <span className="text-xs">{bookmarked ? "Bookmarked" : "Bookmark"}</span>
-                  </button>
-                </div>
-                
-                {/* ---- Audio practice & recording ---- */}
-                <div className="mt-4 min-w-0">
-                  <AudioRecorder
-                    filename={`answer-${current?.id || "untitled"}`}
-                    onRecordingComplete={sendRecordingToBackend}
-                  />
-                </div>
-                {/* ---- end recorder block ---- */}
-              </div>
-
-              {/* Right-side controls (Prev/Next/Reset) */}
-              <div className="flex flex-wrap items-center gap-2 justify-end">
-                <Button variant="secondary" onClick={onReset} disabled={loading} title="Clear and refetch" className="inline-flex items-center gap-2 whitespace-nowrap">
-                  <RefreshCw className="h-4 w-4" /> Reset
-                </Button>
-                <Button variant="ghost" onClick={tryPrev} disabled={loading || !bank.length} title="Shortcut: P or ←" className="inline-flex items-center gap-2 whitespace-nowrap">
-                  <ChevronLeft className="h-4 w-4" /> Prev
-                </Button>
-                <Button
-                  onClick={() => {
-                    cancelSpeech();
-                    next();
-                    if (prefs.qSecs) endRef.current = Date.now() + prefs.qSecs * 1000;
-                    if (bank.length) {
-                      toast.message("Next question", { description: `#${index + 2} of ${bank.length}` });
-                    }
-                  }}
-                  disabled={loading || !bank.length}
-                  className="whitespace-nowrap"
-                >
-                  <ChevronRight className="h-4 w-4" /> Next
-                </Button>
-              </div>
-
-              <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-muted">
-                <div
-                  role="progressbar"
-                  aria-label="Question progress"
-                  aria-valuemin={0}
-                  aria-valuemax={bank.length ? bank.length : 0}
-                  aria-valuenow={bank.length ? Math.min(index + 1, bank.length) : 0}
-                  title={`Progress: ${bank.length ? index + 1 : 0} of ${bank.length}`}
-                  className="h-2 rounded-full bg-gradient-to-r from-brand-500 to-accent-500 transition-[width] duration-300"
-                  style={{ width: bank.length ? `${((index + 1) / bank.length) * 100}%` : "0%" }} />
-              </div>
-
-              {/* footer & notes */}
-              <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
-                <p className="text-xs text-muted-foreground min-w-0">
-                  Session time: {fmtMMSS(elapsed)}
-                  {prefs.qSecs ? (
-                    <span className="ml-3 inline-flex items-center gap-1 text-foreground/70">
-                      <Timer className="h-3 w-3" /> <span>Next in: {fmtMMSS(remaining)}</span>
-                    </span>
-                  ) : null}
-                </p>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    onClick={() => setNotesOpen((v) => !v)}
-                    className="inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-1.5 text-foreground/80 hover:bg-secondary/80 focus-ring whitespace-nowrap"
-                    title="Open notes">
-                    <StickyNote className="h-4 w-4" /> Notes
-                  </button>
-                  <button
-                    onClick={() => exportNotesCSV()}
-                    className="inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-1.5 text-foreground/80 hover:bg-secondary/80 focus-ring whitespace-nowrap"
-                    title="Export notes">
-                    Export notes
-                  </button>
-
-                  {!completeOpen ? (
-                    <Button variant="primary" onClick={() => setCompleteOpen(true)} disabled={!role || !bank.length || loading} className="inline-flex items-center gap-2 whitespace-nowrap" title="Save this session">
-                      <CheckCircle2 className="h-4 w-4" /> Complete session
-                    </Button>
-                  ) : (
-                    <Button variant="ghost" onClick={() => setCompleteOpen(false)} className="inline-flex items-center gap-2 whitespace-nowrap" title="Cancel">
-                      <X className="h-4 w-4" /> Cancel
-                    </Button>
-                  )}
-                </div>
-              </div>
-
-              {/* notes panel */}
-              {notesOpen && current?.id && (
-                <div className="surface p-4 mt-2">
->>>>>>> feature/analytics
                   <p className="mb-2 text-sm text-muted-foreground">Notes for this question</p>
                   <Textarea
                     value={note}
                     onChange={(e) => setNoteState(e.target.value)}
                     placeholder="Write your thoughts, structure, hints…"
-<<<<<<< HEAD
                     className="min-h-[120px]"
                   />
 
@@ -1042,14 +744,6 @@ export default function InterviewPage() {
               )}
 
               {/* NEW: ---- Transcript & Analysis UI ---- */}
-=======
-                    className="min-h-[120px] w-full"
-                  />
-                </div>
-              )}
-
-              {/* ---- Transcript & Analysis UI ---- */}
->>>>>>> feature/analytics
               {uploadError && (
                 <div className="mt-4 rounded border border-red-300 bg-red-50 p-3 text-sm text-red-700 break-words">
                   {uploadError}
@@ -1148,24 +842,15 @@ export default function InterviewPage() {
               )}
               {/* ---- end transcript & analysis UI ---- */}
 
-<<<<<<< HEAD
               {/* complete/save panel */}
               {completeOpen && (
                 <div className="surface p-4 mt-4">
-=======
-              {completeOpen && (
-                <div className="surface p-4 mt-2">
->>>>>>> feature/analytics
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-foreground">Set your score</p>
                       <p className="text-xs text-muted-foreground">Move the slider and click Save</p>
                     </div>
-<<<<<<< HEAD
                     <div className="flex items-center gap-3">
-=======
-                    <div className="flex flex-wrap items-center gap-3">
->>>>>>> feature/analytics
                       <span className={`inline-flex items-center rounded-lg px-2 py-1 text-xs ring-1 ${scorePill(score)}`}>{score}</span>
                       <input
                         type="range"
@@ -1175,26 +860,15 @@ export default function InterviewPage() {
                         onChange={(e) => setScore(parseInt(e.target.value))}
                         className="w-48 accent-brand-500"
                       />
-<<<<<<< HEAD
                       <Button onClick={saveAttempt} className="ml-1">Save</Button>
-=======
-                      <Button onClick={saveAttempt} className="ml-1 whitespace-nowrap">Save</Button>
->>>>>>> feature/analytics
                     </div>
                   </div>
                 </div>
               )}
             </div>
-<<<<<<< HEAD
           )}
         </section>
       </main>
     </RequireRole>
-=======
-          </div>
-        )}
-      </section>
-    </main>
->>>>>>> feature/analytics
   );
 }
