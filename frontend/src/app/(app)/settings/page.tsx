@@ -10,6 +10,8 @@ import { updateProfile } from "@/lib/auth";
 import { Card } from "@/components/Card";
 import { Button } from "@/components/ui/Button";
 import RequireRole from "@/components/auth/RequireRole";
+import * as auth from "@/lib/auth";
+import { api } from "@/lib/api";
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -28,17 +30,100 @@ export default function SettingsPage() {
   const [seedLoading, setSeedLoading] = useState(false);
   const [seedCount, setSeedCount] = useState(10);
 
-  // Prefill from auth (redirect if not logged in)
+  // Prefill from auth (redirect if not logged in) and synchronize role for local/demo users
   useEffect(() => {
     if (loading) return;
     if (!user) {
       router.push("/login");
       return;
     }
+
+    // Role synchronization for local/demo accounts:
+    // 1) If the current account exists in local storage (created via signup), fetch authoritative backend role
+    // 2) If backend role differs from local role, update local storage and refresh client state
+    async function syncLocalRole() {
+      try {
+        const localStored = auth.__getStoredUser(user.email || "");
+        if (!localStored) {
+          // Not a local/demo user — NextAuth is the source of truth.
+          return;
+        }
+
+        // Use api.auth.getProfile for dev-only role lookup
+        try {
+          const payload = await api.auth.getProfile(user.email || "");
+          const backendRole = payload?.role ?? undefined;
+          const localRole = localStored.role ?? undefined;
+
+          if ((backendRole ?? undefined) !== (localRole ?? undefined)) {
+            try {
+              auth.updateRoleLocal(user.email || "", backendRole);
+            } catch (e) {
+              console.warn("updateRoleLocal failed:", e);
+            }
+
+            try {
+              await refresh();
+            } catch (e) {
+              console.warn("refresh after updateRoleLocal failed:", e);
+            }
+
+            toast.success(`Role synchronized to ${backendRole ?? "none"}.`);
+            // Update UI fields to reflect newest role
+            setName(user.name || "");
+            setEmail(user.email || "");
+            setRole(backendRole || "");
+            return;
+          }
+        } catch (err) {
+          // If api.auth.getProfile failed (maybe dev route disabled), try the legacy fetch path.
+          try {
+            const emailParam = encodeURIComponent(user.email || "");
+            const res = await fetch(`/api/auth/role?email=${emailParam}`, { cache: "no-store" });
+            if (!res.ok) {
+              console.warn("role lookup failed:", res.status, await res.text().catch(() => ""));
+              return;
+            }
+            const payload = await res.json().catch(() => ({}));
+            const backendRole = payload?.role ?? undefined;
+            const localRole = localStored.role ?? undefined;
+
+            if ((backendRole ?? undefined) !== (localRole ?? undefined)) {
+              try {
+                auth.updateRoleLocal(user.email || "", backendRole);
+              } catch (e) {
+                console.warn("updateRoleLocal failed:", e);
+              }
+
+              try {
+                await refresh();
+              } catch (e) {
+                console.warn("refresh after updateRoleLocal failed:", e);
+              }
+
+              toast.success(`Role synchronized to ${backendRole ?? "none"}.`);
+              setName(user.name || "");
+              setEmail(user.email || "");
+              setRole(backendRole || "");
+              return;
+            }
+          } catch (e) {
+            console.warn("syncLocalRole fallback failed:", e);
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn("syncLocalRole error:", e);
+      }
+    }
+
+    void syncLocalRole();
+
+    // Prefill UI fields with current (possibly refreshed) user object
     setName(user.name || "");
     setEmail(user.email || "");
     setRole(user.role || "");
-  }, [user, loading, router]);
+  }, [user, loading, router, refresh]);
 
   async function onSave(e: React.FormEvent) {
     e.preventDefault();
@@ -50,18 +135,12 @@ export default function SettingsPage() {
       // Update local profile (display name stored locally for now)
       updateProfile({ name: name.trim(), role: role.trim() || undefined });
 
-      // Also persist role to backend if provided
+      // Also persist role to backend if provided (use API helper)
       if (role.trim()) {
-        const res = await fetch("/api/auth/role", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ role }),
-        });
-
-        if (!res.ok) {
-          const txt = await res.text().catch(() => "");
-          throw new Error(txt || "Failed to update role");
-        }
+        await api.auth.setRole(role.trim());
+      } else {
+        // If clearing role (empty), still call setRole with empty string so backend converts to None.
+        await api.auth.setRole("");
       }
 
       // 🧹 make sure no stale client override persists

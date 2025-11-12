@@ -28,3 +28,48 @@
 {"type": "role_change", "email": "utkarsh@example.com", "before": "Admin", "after": "Trainer", "ts": 1762970532}
 {"type": "role_change", "email": "jayant@example.com", "before": "Admin", "after": "Trainer", "ts": 1762970553}
 {"type": "role_change", "email": "jayant@example.com", "before": "Trainer", "after": "Admin", "ts": 1762970597}
+{"type": "role_change", "email": "jayant@example.com", "before": "Admin", "after": "Student", "ts": 1762976528}
+{"type": "role_change", "email": "utkarsh@example.com", "before": "Trainer", "after": "Admin", "ts": 1762976538}
+{"type": "role_change", "email": "jayant@example.com", "before": "Student", "after": "Admin", "ts": 1762976759}
+{"type": "role_change", "email": "pankajkrg93@gmail.com", "before": "Student", "after": "Admin", "ts": 1762976815}
+{"type": "role_change", "email": "pankajkrg2016@gmail.com", "before": "Admin", "after": "Student", "ts": 1762977009}
+{"type": "role_change", "email": "pankajkrg2016@gmail.com", "before": "Student", "after": "Admin", "ts": 1762977070}
+{"type": "role_change", "email": "asadadmin@example.com", "before": "Admin", "after": "Student", "ts": 1762977128}
+{"type": "role_change", "email": "asadadmin@example.com", "before": "Student", "after": "Admin", "ts": 1762977174}
+{"type": "role_change", "email": "jayant@example.com", "before": "Admin", "after": null, "ts": 1762977182}
+{"type": "role_change", "email": "jayant@example.com", "before": null, "after": "Admin", "ts": 1762977233}
+{"type": "role_change", "email": "pankajkrg93@gmail.com", "before": "Admin", "after": "Trainer", "ts": 1762977239}
+{"type": "role_change", "email": "asadadmin@example.com", "before": "Admin", "after": "Trainer", "actor": "pankajkrg2016@gmail.com", "ts": 1762978067}
+{"type": "role_change", "email": "pankajkrg93@gmail.com", "before": "Trainer", "after": "Student", "actor": "pankajkrg2016@gmail.com", "ts": 1762978080}
+{"type": "role_change", "email": "asadadmin@example.com", "before": "Trainer", "after": "Student", "actor": "jayant@example.com", "ts": 1762978225}
+{"type": "role_change", "email": "asadadmin@example.com", "before": "Student", "after": "Trainer", "actor": "jayant@example.com", "ts": 1762978229}
+{"type": "role_change", "email": "asadadmin@example.com", "before": "Trainer", "after": "Student", "actor": "jayant@example.com", "ts": 1762978281}
+{"type": "role_change", "email": "asadadmin@example.com", "before": "Student", "after": "Trainer", "ts": 1762978436}
+{"type": "role_change", "email": "pankajkrg93@gmail.com", "before": "Student", "after": "Trainer", "ts": 1762978507}
+{"type": "role_change", "email": "asadadmin@example.com", "before": "Trainer", "after": "Student", "ts": 1762980262}
+{"type": "role_change", "email": "asadadmin@example.com", "before": "Student", "after": "Trainer", "ts": 1762980355}
+{"type": "role_change", "email": "trainer@example.com", "before": "Trainer", "after": "Student", "ts": 1762980419}
+{"type": "role_change", "email": "prem@example.com", "before": "Admin", "after": "Student", "ts": 1762980481}
+{"type": "role_change", "email": "pankajkrg93@gmail.com", "before": "Trainer", "after": "Admin", "ts": 1762980583}
+{"type": "role_change", "email": "pankajkrg93@gmail.com", "before": "Admin", "after": "Student", "ts": 1762980656}
+{"type": "role_change", "email": "asadadmin@example.com", "before": "Trainer", "after": "Student", "ts": 1762980718}
+{"type": "role_change", "email": "asadadmin@example.com", "before": "Student", "after": "Trainer", "ts": 1762981333}
+{"type": "role_change", "email": "asadadmin@example.com", "before": "Trainer", "after": "Student", "ts": 1762982711}
+{"type": "role_change", "email": "pankajkrg93@gmail.com", "before": "Student", "after": "Trainer", "ts": 1762982725}
+{"type": "role_change", "email": "pankajkrg93@gmail.com", "before": "Trainer", "after": "Admin", "ts": 1762982844}
+{"type": "role_change", "email": "asadadmin@example.com", "before": "Student", "after": "Trainer", "ts": 1762982849}
+{"type": "role_change", "email": "asadadmin@example.com", "before": "Trainer", "after": "Student", "ts": 1762983848}
+{"type": "role_change", "email": "pankajkrg93@gmail.com", "before": "Admin", "after": "Trainer", "ts": 1762983852}
+{"type": "role_change", "email": "pankajkrg93@gmail.com", "before": "Trainer", "after": "Admin", "ts": 1762987648}
+{"type": "role_change", "email": "asadadmin@example.com", "before": "Student", "after": "Trainer", "ts": 1762987652}
+{"type": "role_change", "email": "pankajkrg93@gmail.com", "before": "Admin", "after": "Trainer", "ts": 1762987660}
+{"type": "role_change", "email": "asadadmin@example.com", "before": "Trainer", "after": "Student", "ts": 1762987762}
+{"type": "role_change", "email": "pankajkrg93@gmail.com", "before": "Trainer", "after": "Student", "ts": 1762987773}
+{"type": "role_change", "email": "asadadmin@example.com", "before": "Student", "after": "Admin", "ts": 1762987844}
+{"type": "role_change", "email": "pankajkrg93@gmail.com", "before": "Student", "after": "Admin", "ts": 1762987854}
+{"type": "role_change", "email": "asadadmin@example.com", "before": "Admin", "after": "Trainer", "ts": 1762988818}
+{"type": "role_change", "email": "asadadmin@example.com", "before": "Trainer", "after": "Student", "ts": 1762988828}
+{"type": "role_change", "email": "abhijeetstud@example.com", "before": "Student", "after": "Admin", "ts": 1762989635}
+{"type": "role_change", "email": "abhijeetstud@example.com", "before": "Admin", "after": "Student", "ts": 1762989687}
+{"type": "role_change", "email": "abhijeetstud@example.com", "before": "Student", "after": "Trainer", "ts": 1762989754}
+{"type": "role_change", "email": "abhijeetstud@example.com", "before": "Trainer", "after": "Admin", "ts": 1762989815}

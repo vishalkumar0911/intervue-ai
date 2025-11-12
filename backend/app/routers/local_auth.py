@@ -42,11 +42,14 @@ def signup_local(p: SignupIn):
     NOTE: Password is not persisted in this demo backend (frontend keeps it for local-only auth),
     but we still register the user centrally so Admin/analytics can see them.
     """
+    # Treat empty-string roles as None so we don't overwrite an admin-set role with blank.
+    role_to_persist = (p.role.strip() if isinstance(p.role, str) and p.role.strip() else None)
+
     rec = upsert_user(
         email=p.email,
         id=p.email,  # simple stable id
         name=p.name or p.email.split("@")[0],
-        role=p.role,   # <-- FIXED: Pass the user's selected role (p.role)
+        role=role_to_persist,   # <-- use normalized value (None if empty)
         provider="local",
     )
     token = _issue_app_jwt(p.email, id=rec.get("id"), name=rec.get("name"), role=rec.get("role"))

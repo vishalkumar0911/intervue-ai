@@ -1,4 +1,4 @@
-// src/app/(app)/admin/users/page.tsx
+// frontend/src/app/(app)/admin/users/page.tsx
 "use client";
 
 import RequireRole from "@/components/auth/RequireRole";
@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { Search, RefreshCw, Download } from "lucide-react";
 import { api } from "@/lib/api";
 import { useSession } from "next-auth/react";
+import { useAuth } from "@/components/auth/AuthProvider"; // <-- added import
 
 /* ---------------- Types ---------------- */
 
@@ -50,6 +51,7 @@ function RoleBadge({ role }: { role: UserRow["role"] }) {
 export default function AdminUsersPage() {
   const { data: session } = useSession();
   const myEmail = session?.user?.email || "";
+  const { refresh } = useAuth(); // <-- use refresh from AuthProvider
 
   const [rows, setRows] = useState<UserRow[]>([]);
   const [q, setQ] = useState("");
@@ -166,15 +168,33 @@ export default function AdminUsersPage() {
 
     try {
       // PATCH via Next proxy → FastAPI /admin/users { email, role }
+      // NOTE: send 'email' (canonical key) — backend expects 'email'
       const res = await fetch("/api/admin/users", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: user.email, role: newRole }),
+        body: JSON.stringify({ email: user.email, role: newRole }),
       });
       if (!res.ok) throw new Error(await res.text());
       await res.json();
 
       toast.success(`Role updated to ${newRole ?? "none"}`);
+
+      // Ensure current client syncs its session (keeps UI consistent).
+      // If the admin changed their own role, we show explicit feedback; otherwise refresh silently.
+      try {
+        // Also attempt to tell local/demo clients about change if they're local (AuthProvider listens for storage/auth:changed)
+        // and refresh NextAuth session for OAuth users
+        await refresh();
+        if (isSelf) {
+          toast.success("Your session has been refreshed.");
+        }
+      } catch (err: any) {
+        console.warn("failed to refresh session after role change:", err);
+        if (isSelf) {
+          toast.error("Could not refresh session automatically; please refresh the page.");
+        }
+      }
+
       // refresh audit
       void loadAudit();
     } catch (e: any) {

@@ -1,4 +1,5 @@
-// src/lib/api.ts
+// frontend/src/lib/api.ts
+// (only the file portion relevant to the api object is shown here — replace your existing file with this full content)
 
 import { toast } from "sonner";
 /* ---------------- Types ---------------- */
@@ -383,10 +384,13 @@ export const api = {
   /* Admin endpoints */
   admin: {
     listUsers: () => request<AdminUser[]>(p("/admin/users")),
-    updateUserRole: (id: string, role: "Student" | "Trainer" | "Admin" | null) =>
+
+    // ------------- FIXED: accept email (canonical key) -------------
+    // usage: api.admin.updateUserRole(email, role)
+    updateUserRole: (email: string, role: "Student" | "Trainer" | "Admin" | null) =>
       request<AdminUser>(p("/admin/users"), {
         method: "PATCH",
-        body: { id, role },
+        body: { email, role },
       }),
   },
 

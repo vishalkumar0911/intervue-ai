@@ -1,3 +1,4 @@
+// frontend/src/app/api/_proxy.ts
 import { getServerSession } from "next-auth";
 import { authOptions } from "./auth/[...nextauth]/route";
 

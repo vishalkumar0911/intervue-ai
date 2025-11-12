@@ -1,4 +1,4 @@
-// src/app/api/admin/users/route.ts
+// frontend/src/app/api/admin/users/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { cookies } from "next/headers";
@@ -56,14 +56,35 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Read incoming JSON body safely
   const body = await req.json().catch(() => ({}));
-  const payload = { email: body.id, role: body.role }; // id=email from UI
 
+  // Accept both `email` and `id` coming from the client; prefer provided email.
+  // The backend accepts either `email` or `id`. If the client sent email, keep it.
+  // If the client sent id (older UI), accept it. If neither is provided, return 422 here.
+  const providedEmail = typeof body.email === "string" && body.email.trim() ? body.email.trim() : undefined;
+  const providedId = typeof body.id === "string" && body.id.trim() ? body.id.trim() : undefined;
+
+  const payload: Record<string, any> = {
+    // include whichever canonical key we have (email preferred)
+    ...(providedEmail ? { email: providedEmail } : {}),
+    ...(providedEmail ? {} : providedId ? { id: providedId } : {}),
+    // role may be string, null, or undefined
+    role: body.hasOwnProperty("role") ? body.role : undefined,
+  };
+
+  // Validate presence of identifier before forwarding
+  if (!payload.email && !payload.id) {
+    return NextResponse.json({ error: "Either 'email' or 'id' must be provided" }, { status: 422 });
+  }
+
+  // Validate role is one of allowed values (explicit null allowed)
   const allowed = ["Student", "Trainer", "Admin", null];
-  if (!allowed.includes(payload.role)) {
+  if (payload.hasOwnProperty("role") && !allowed.includes(payload.role)) {
     return NextResponse.json({ error: "Invalid role" }, { status: 400 });
   }
 
+  // Forward to backend
   const res = await fetch(`${BASE}/admin/users`, {
     method: "PATCH",
     headers: { ...headers, "content-type": "application/json" },

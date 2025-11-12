@@ -11,7 +11,7 @@
     "id": "102455925389132325188",
     "email": "pankajkrg93@gmail.com",
     "name": "Pankaj kumar Gupta",
-    "role": "Student",
+    "role": "Admin",
     "provider": "google",
     "createdAt": 1758238924
   },
@@ -19,7 +19,7 @@
     "id": "sub123",
     "email": "trainer@example.com",
     "name": "Trainer T",
-    "role": "Trainer",
+    "role": "Student",
     "provider": "google",
     "createdAt": 1758256225
   },
@@ -59,7 +59,7 @@
     "id": "utkarsh@example.com",
     "email": "utkarsh@example.com",
     "name": "utkarsh",
-    "role": "Trainer",
+    "role": "Admin",
     "provider": "local",
     "createdAt": 1762966862
   },
@@ -75,8 +75,24 @@
     "id": "prem@example.com",
     "email": "prem@example.com",
     "name": "prem",
-    "role": "Admin",
+    "role": "Student",
     "provider": "local",
     "createdAt": 1762969211
+  },
+  "asadadmin@example.com": {
+    "id": "asadadmin@example.com",
+    "email": "asadadmin@example.com",
+    "name": "asad",
+    "role": "Student",
+    "provider": "local",
+    "createdAt": 1762976738
+  },
+  "abhijeetstud@example.com": {
+    "id": "abhijeetstud@example.com",
+    "email": "abhijeetstud@example.com",
+    "name": "abhijeet",
+    "role": "Admin",
+    "provider": "local",
+    "createdAt": 1762989591
   }
 }

@@ -1,3 +1,4 @@
+// frontend/src/components/auth/RequireRole.tsx
 "use client";
 
 import { ReactNode, useEffect, useMemo, useRef } from "react";

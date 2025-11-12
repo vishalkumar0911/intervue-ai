@@ -45,7 +45,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from starlette.middleware.gzip import GZipMiddleware
 
 # NEW: import extra routers (files you added)
-from app.routes_admin import router as admin_router
+from app.routes_admin import router as admin_router, public_router as admin_public_router
 from app.routes_trainer import router as trainer_router
 
 # -------------------- Settings --------------------
@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     OPENAI_TRANSCRIBE_MODEL: str = "whisper-1"
     OPENAI_ANALYZE_MODEL: str = "gpt-4o-mini" # Merged from 'openai_analyze_model'
 
+    # DEV_MODE: when true, enable demo-only public endpoints (safe for local dev)
+    DEV_MODE: str = "true"
+
     # pydantic-settings v2 config
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -90,6 +93,7 @@ class Settings(BaseSettings):
 settings = Settings()
 print("[BOOT] BACKEND_API_KEY =", repr(settings.BACKEND_API_KEY))  # debug
 print("[BOOT] FRONTEND_URL    =", repr(settings.FRONTEND_URL))     # debug
+print("[BOOT] DEV_MODE        =", repr(settings.DEV_MODE))         # debug
 
 # -------------------- Logging --------------------
 logger = logging.getLogger("intervue")
@@ -788,7 +792,7 @@ def next_question(
     index: int = Query(0, ge=0),
     difficulty: Optional[str] = Query(None, pattern="^(easy|medium|hard)$"),
 ):
-    """Return item at index (wraps) with optional difficulty filter."""
+    """Return item at index (wraps) with optional difficulty filter.""" 
     hot_reload_if_changed()
     bank = _filtered_bank(role, difficulty)
     if not bank:
@@ -932,7 +936,7 @@ def add_attempt(payload: AttemptCreate = Body(...)):
     dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)],
 )
 def delete_attempt(attempt_id: UUID):
-    """Delete an attempt by id."""
+    """Delete an attempt by id.""" 
     aid = str(attempt_id)
     found = False
 
@@ -1309,6 +1313,16 @@ app.include_router(local_auth_router,  dependencies=[Depends(require_api_key), D
 app.include_router(admin_router,   dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)])
 app.include_router(trainer_router, dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)])
 
+# -------------------- Public/dev-only endpoints --------------------
+# Expose admin_public_router (contains /auth/role) for local/demo clients.
+# This is deliberately NOT protected by the API key so signup/localStorage users can fetch role.
+# Guard exposure with DEV_MODE environment variable: set DEV_MODE=false to disable.
+if str(settings.DEV_MODE).lower() in {"", "1", "true", "yes", "on"}:
+    app.include_router(admin_public_router)
+    print("[BOOT] Included admin_public_router (dev-only public endpoints)")
+else:
+    print("[BOOT] Skipped admin_public_router (DEV_MODE disabled)")
+
 # -------------------- Developer utilities --------------------
 @app.post(
     "/dev/seed",
@@ -1320,7 +1334,7 @@ def dev_seed(
     seed: int = Query(42),
     role: Optional[str] = Query(None, description="Seed only this role; default: all roles"),
 ):
-    """Create synthetic attempts for quick demos/testing."""
+    """Create synthetic attempts for quick demos/testing.""" 
     rng = random.Random(seed)
     roles = [role] if role else sorted(QUESTIONS.keys()) or ["Frontend Developer"]
     if not roles:

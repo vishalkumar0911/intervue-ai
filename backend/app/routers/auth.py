@@ -51,21 +51,28 @@ def oauth_google_upsert(p: GoogleUpsertIn):
 
 # -------- /auth/role --------
 class RoleIn(BaseModel):
-    role: str
+    role: Optional[str]  # allow optional so empty payloads are accepted
 
 ALLOWED_ROLES = {"Student", "Trainer", "Admin"}
 
 @router.post("/role")
 def set_role(body: RoleIn, user: CurrentUser = Depends(get_current_user)):
-    role = (body.role or "").strip()
-    if role not in ALLOWED_ROLES:
+    # Normalize incoming role
+    role_raw = (body.role or "")
+    role = role_raw.strip()
+
+    # Only reject if a non-empty role is provided and it's invalid.
+    if role and role not in ALLOWED_ROLES:
         raise HTTPException(status_code=400, detail="Invalid role")
+
+    # Treat empty string as None so we preserve existing canonical role in users.json.
+    role_to_persist = role if role else None
 
     rec = upsert_user(
         email=user.email,
         id=user.id,
         name=user.name or user.email.split("@")[0],
-        role=role,
+        role=role_to_persist,  # pass None to keep existing value
         provider="local",  # keep/normalize
     )
     return {"ok": True, "role": rec.get("role")}
