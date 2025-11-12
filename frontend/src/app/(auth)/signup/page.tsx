@@ -10,6 +10,23 @@ import { toast } from "sonner";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { updateProfile } from "@/lib/auth";
 
+// Added a new function to call the backend's signup endpoint
+async function callBackendSignup(name: string, email: string, role: string, password: string) {
+  // Use the local /api proxy route
+  const res = await fetch("/api/auth/signup", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    // Send all required metadata to the FastAPI endpoint
+    body: JSON.stringify({ name, email, role, password }),
+  });
+
+  // Log a warning if the backend mirroring fails, but let the local session proceed
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    console.warn("Backend signup mirror failed:", res.status, text);
+  }
+}
+
 export default function SignupPage() {
   const router = useRouter();
   const { signup } = useAuth();
@@ -28,7 +45,13 @@ export default function SignupPage() {
     }
     setLoading(true);
     try {
+      // 1. Create user locally (in browser localStorage for demo mode)
       await signup(name.trim(), email.trim(), pass, role.trim());
+      
+      // 2. MIRROR TO BACKEND (FastAPI user_store) so it appears in Admin list
+      // We don't wait for this to avoid slowing down the user's login.
+      void callBackendSignup(name.trim(), email.trim(), role.trim(), pass);
+
       if (role.trim()) updateProfile({ role: role.trim() });
       toast.success("Account created!");
       router.push("/dashboard");

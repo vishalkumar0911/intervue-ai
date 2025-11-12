@@ -43,7 +43,7 @@
     "id": "jayant@example.com",
     "email": "jayant@example.com",
     "name": "jayant",
-    "role": null,
+    "role": "Admin",
     "provider": "local",
     "createdAt": 1760662529
   },
@@ -54,5 +54,29 @@
     "role": null,
     "provider": "google",
     "createdAt": 1762080258
+  },
+  "utkarsh@example.com": {
+    "id": "utkarsh@example.com",
+    "email": "utkarsh@example.com",
+    "name": "utkarsh",
+    "role": "Trainer",
+    "provider": "local",
+    "createdAt": 1762966862
+  },
+  "praveenadmin@example.com": {
+    "id": "praveenadmin@example.com",
+    "email": "praveenadmin@example.com",
+    "name": "praveen admin",
+    "role": null,
+    "provider": "local",
+    "createdAt": 1762968913
+  },
+  "prem@example.com": {
+    "id": "prem@example.com",
+    "email": "prem@example.com",
+    "name": "prem",
+    "role": "Admin",
+    "provider": "local",
+    "createdAt": 1762969211
   }
 }

@@ -67,6 +67,7 @@ def list_users(_admin = Depends(require_admin)):
             role=u.get("role"),
         )
         for email, u in users.items()
+        if isinstance(u, dict) # <-- FIX: Added robust check for valid user data
     ]
 
 @router.patch("/users", response_model=UserOut)

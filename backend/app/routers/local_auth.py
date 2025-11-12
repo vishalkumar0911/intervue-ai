@@ -46,7 +46,7 @@ def signup_local(p: SignupIn):
         email=p.email,
         id=p.email,  # simple stable id
         name=p.name or p.email.split("@")[0],
-        role=None,   # don’t set role automatically; onboarding or admin can set later
+        role=p.role,   # <-- FIXED: Pass the user's selected role (p.role)
         provider="local",
     )
     token = _issue_app_jwt(p.email, id=rec.get("id"), name=rec.get("name"), role=rec.get("role"))
