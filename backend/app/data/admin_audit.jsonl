@@ -73,3 +73,8 @@
 {"type": "role_change", "email": "abhijeetstud@example.com", "before": "Admin", "after": "Student", "ts": 1762989687}
 {"type": "role_change", "email": "abhijeetstud@example.com", "before": "Student", "after": "Trainer", "ts": 1762989754}
 {"type": "role_change", "email": "abhijeetstud@example.com", "before": "Trainer", "after": "Admin", "ts": 1762989815}
+{"type": "role_change", "email": "pankajkrg93@gmail.com", "before": "Admin", "after": "Trainer", "ts": 1763015699}
+{"type": "role_change", "email": "abhijeetstud@example.com", "before": "Admin", "after": "Student", "ts": 1763015707}
+{"type": "role_change", "email": "pankajkrg93@gmail.com", "before": "Trainer", "after": null, "ts": 1763016028}
+{"type": "role_change", "email": "pankajkrg93@gmail.com", "before": null, "after": "Student", "ts": 1763016034}
+{"type": "role_change", "email": "abhijeetstud@example.com", "before": "Student", "after": "Trainer", "ts": 1763016040}

@@ -78,11 +78,13 @@
     --spot-color: 245 84% 66%;
   }
 
+  /* ensure full height for sticky / fixed layout calculations */
   html,
   body {
     height: 100%;
   }
 
+  /* apply a subtle border color token to all elements by default (keeps look consistent) */
   * {
     @apply border-border;
   }
@@ -111,6 +113,45 @@
   }
 }
 
+/* ---------------- Sidebar layout variables & helpers (robust) ---------------- */
+/*
+  Key ideas:
+  - --sidebar-width is the single source of truth
+  - collapsed state toggles via data-sidebar="collapsed" on <html>
+  - main content uses margin-left (not padding) so centering + container alignment remain correct
+  - small screens remove sidebar offset
+*/
+:root {
+  /* default expanded width */
+  --sidebar-width: 232px;
+  /* collapsed target width (visual) */
+  --sidebar-width-collapsed: 72px;
+}
+
+/* when collapsed, reduce width to the collapsed value (globally readable) */
+[data-sidebar="collapsed"] {
+  --sidebar-width: var(--sidebar-width-collapsed);
+}
+
+/* desktop: main area shifts by sidebar width (smooth transition) */
+@media (min-width: 768px) {
+  .main-with-sidebar.container {
+    padding-left: 0 !important;
+  }
+}
+
+/* mobile: remove offset so auth pages etc remain full width */
+@media (max-width: 767px) {
+  .main-with-sidebar {
+    margin-left: 0 !important;
+  }
+}
+
+/* ensure fixed sidebar never produces horizontal scroll */
+html, body {
+  overflow-x: hidden;
+}
+
 /* ---------------- Components ---------------- */
 @layer components {
   .card { @apply bg-card text-card-foreground rounded-2xl border shadow-soft; }
@@ -136,8 +177,7 @@
   .card-hover { @apply card transition hover:shadow-lg hover:border-primary/40; }
 
   .nav-glass {
-    @apply border-b border-border bg-background/70 backdrop-blur
-           supports-[backdrop-filter]:bg-background/70;
+    @apply border-b border-border bg-background/70 backdrop-blur supports-[backdrop-filter]:bg-background/70;
   }
 
   .input {
@@ -154,7 +194,7 @@
   }
 }
 
-/* ---------------- Utilities ---------------- */
+/* ---------------- Utilities / helpers ---------------- */
 @layer utilities {
   .text-muted-foreground { @apply text-slate-600 dark:text-white/70; }
 

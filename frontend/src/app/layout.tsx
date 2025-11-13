@@ -1,10 +1,11 @@
-// app/layout.tsx
+// frontend/src/app/layout.tsx
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 import { Inter, JetBrains_Mono } from "next/font/google";
 import Providers from "@/components/Providers";
 import { Navbar } from "@/components/Navbar";
+import SidebarShell from "@/components/shell/SidebarShell";
 import { Footer } from "@/components/Footer";
 import { Toaster } from "sonner";
 
@@ -59,15 +60,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           mono.variable,
           "font-sans antialiased",
           "min-h-screen min-h-dvh",
-          // tokenized colors (globals.css defines the CSS vars)
           "bg-background text-foreground",
-          // better text selection
           "selection:bg-primary/20 selection:text-primary-foreground",
-          // safe-area padding on iOS
           "pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]",
         ].join(" ")}
       >
-        {/* Skip link for accessibility */}
+        {/* Accessibility skip link */}
         <a
           href="#main"
           className="sr-only focus:not-sr-only focus:fixed focus:z-[100] focus:top-3 focus:left-3
@@ -76,27 +74,27 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           Skip to content
         </a>
 
-        {/* Background: subtle grid + spotlight, consistent in light & dark */}
+        {/* Global background decoration */}
         <div aria-hidden className="pointer-events-none fixed inset-0 -z-10">
-          <div
-            className="absolute inset-0 bg-grid bg-[size:28px_28px]
-                       opacity-[.04] dark:opacity-[.06]
-                       [--grid-color:theme(colors.slate.900)]
-                       dark:[--grid-color:theme(colors.white)]"
-          />
-          <div
-            className="absolute inset-0 bg-spotlight
-                       [--spot-color:theme(colors.brand.500)]
-                       opacity-[.18] dark:opacity-[.25]"
-          />
+          <div className="absolute inset-0 bg-grid bg-[size:28px_28px] opacity-[.04] dark:opacity-[.06]" />
+          <div className="absolute inset-0 bg-spotlight opacity-[.18] dark:opacity-[.25]" />
         </div>
 
-        {/* Client providers (theme, auth, etc.) */}
         <Providers>
           <Navbar />
-          <main id="main" className="container py-6 md:py-8">
+          {/* SidebarShell decides whether to mount the sidebar on the current route */}
+          <SidebarShell />
+
+          {/* main-with-sidebar will be shifted on desktop by CSS var --sidebar-width */}
+          {/* Use controlled padding instead of Tailwind's container to avoid the left-gap */}
+          <main
+            id="main"
+            className="py-6 md:py-8 main-with-sidebar px-4 md:px-6 max-w-screen-2xl mx-auto"
+            role="main"
+          >
             {children}
           </main>
+
           <Footer />
           <Toaster position="top-right" richColors closeButton />
         </Providers>
