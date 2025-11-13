@@ -1,3 +1,4 @@
+# vishalkumar0911/intervue-ai/intervue-ai-Vishal/backend/requirements.txt
 fastapi==0.116.1
 pydantic==2.11.7
 pydantic-settings==2.10.1
@@ -15,6 +16,10 @@ openai>=1.0.0
 # NEW: Added for resume parsing
 pdfminer.six>=20221105
 python-docx>=1.1.0
+
+# NEW: Added for local transcription
+SpeechRecognition>=3.10.0
+pocketsphinx>=0.1.15
 
 # These are pulled automatically by the lines above, so no need to pin:
 # starlette, anyio, h11, idna, pydantic-core, annotated-types, typing-extensions, typing-inspection

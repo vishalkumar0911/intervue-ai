@@ -1,3 +1,4 @@
+// vishalkumar0911/intervue-ai/intervue-ai-Vishal/frontend/src/app/(app)/interview/page.tsx
 // frontend/src/app/(app)/interview/page.tsx
 "use client";
 
@@ -22,33 +23,62 @@ import { useInterviewStore } from "@/store/interview";
  */
 function Typewriter({ text, onComplete }: { text: string; onComplete: () => void }) {
   const [displayText, setDisplayText] = useState("");
-  const index = useRef(0);
-  const timer = useRef<NodeJS.Timeout>();
+  const indexRef = useRef(0);
+  const timerRef = useRef<number | null>(null);
+
+  // split into grapheme clusters -- [...text] is OK for most cases; for full correctness you can use Intl.Segmenter
+  const chars = useMemo(() => {
+    // If you're targeting modern browsers you can use: return [...new Intl.Segmenter().segment(text)].map(s => s.segment);
+    return Array.from(text); // handles surrogate pairs better than charAt
+  }, [text]);
 
   useEffect(() => {
-    index.current = 0;
+    // cleanup any previous timer
+    if (timerRef.current) {
+      window.clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    indexRef.current = 0;
     setDisplayText("");
 
-    function type() {
-      if (index.current < text.length) {
-        setDisplayText((prev) => prev + text.charAt(index.current));
-        index.current++;
-        const delay = Math.max(20, 100 - text.length); // Faster for longer text
-        timer.current = setTimeout(type, delay);
-      } else {
-        onComplete();
-      }
+    if (!chars || chars.length === 0) {
+      onComplete();
+      return;
     }
-    
-    timer.current = setTimeout(type, Math.max(20, 100 - text.length));
+
+    // show first character immediately to avoid initial-skip visual glitch
+    setDisplayText(chars[0]);
+    indexRef.current = 1;
+
+    // compute per-character delay: adjust to taste
+    const perCharDelay = Math.max(20, Math.min(200, Math.round(600 / Math.max(1, chars.length))));
+
+    timerRef.current = window.setInterval(() => {
+      if (indexRef.current >= chars.length) {
+        if (timerRef.current) {
+          window.clearInterval(timerRef.current);
+          timerRef.current = null;
+        }
+        onComplete();
+        return;
+      }
+      const nextChar = chars[indexRef.current];
+      setDisplayText((prev) => prev + nextChar);
+      indexRef.current += 1;
+    }, perCharDelay);
 
     return () => {
-      if (timer.current) clearTimeout(timer.current);
+      if (timerRef.current) {
+        window.clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
     };
-  }, [text, onComplete]);
+  }, [chars, onComplete]);
 
   return <p className="text-3xl md:text-4xl font-semibold leading-snug">{displayText}</p>;
 }
+
+
 
 /**
  * A simple audio visualizer
@@ -144,7 +174,7 @@ function InterviewSession() {
     incrementAttempt, // Get the new action
   } = useInterviewStore();
 
-  const recorderRef = useRef<{ start: () => void; stop: () => Promise<File | null> }>(null);
+  const recorderRef = useRef<{ start: () => Promise<void>; stop: () => Promise<File | null> }>(null);
   
   // Calculate duration based on the question type from the AI
   const listenDuration = useMemo(() => {
@@ -158,12 +188,18 @@ function InterviewSession() {
   // This is the core audio processing loop
   const handleAudioComplete = async (audioFile: File | null) => {
     
-    // 1. Check for inaudible audio
-    if (!audioFile || audioFile.size < 2000) { // 2KB threshold
-      toast.warning("Audio was inaudible", {
-        description: "Your response was too short. Please try again.",
-      });
-      
+    // Debug: allow developer to play recorded file in page for diagnosis
+    async function playDebug(f: File) {
+      const url = URL.createObjectURL(f);
+      const a = document.createElement("audio");
+      a.controls = true;
+      a.src = url;
+      document.body.appendChild(a);
+      try { await a.play(); } catch {}
+    }
+
+    if (!audioFile || audioFile.size < 1500) { // Using 1.5KB threshold
+      toast.warning("Audio was inaudible", { description: "Your response was too short. Please try again." });
       incrementAttempt(); 
       setState("asking"); // Show question again
       
@@ -171,6 +207,8 @@ function InterviewSession() {
       setTimeout(() => setState("listening"), 2000); // 2-second pause
       return;
     }
+    
+    // playDebug(audioFile); // Uncomment for local debugging
 
     if (!currentQuestion || !sessionId) {
       setError("Session error. Please restart.");
@@ -180,8 +218,18 @@ function InterviewSession() {
     try {
       // 2. Transcribe
       setState("processing");
-      // toast("Transcribing your answer..."); // <-- REMOVED per request
-      const transcribeResult = await api.interview.transcribe(audioFile, currentQuestion.id);
+      
+      //
+      // --- ⬇️ MODIFIED `api.interview.transcribe` call ⬇️ ---
+      //
+      const transcribeResult = await api.interview.transcribe(
+        audioFile,
+        currentQuestion.id,
+        sessionId
+      );
+      //
+      // --- ⬆️ END MODIFIED call ⬆️ ---
+      //
 
       // 3. Store this "turn" locally
       const event = {
@@ -197,15 +245,15 @@ function InterviewSession() {
 
       if (nextQuestion) {
         // 5a. If there is a next question, ask it
-        // toast("Loading next question..."); // <-- REMOVED per request
         setCurrentQuestion(nextQuestion);
         setState("asking");
         // Flow: asking -> (typewriter) -> (pause) -> listening
       } else {
         // 5b. No more questions. End the interview and generate report.
-        toast("Interview complete! Generating your report..."); // <-- KEPT as this is an important final status
+        toast("Interview complete! Generating your report...");
         
         // This is the new batch analysis call
+        // api.ts maps this to /interview/complete
         await api.interview.generateReport(sessionId, newHistory);
         
         // Set to ended state
@@ -236,21 +284,35 @@ function InterviewSession() {
   // Trigger recorder when state changes to "listening"
   useEffect(() => {
     if (interviewState === "listening") {
-      recorderRef.current?.start();
+      (async () => {
+        try {
+          await recorderRef.current?.start();
+          console.debug("[session] recorder started for question", currentQuestion?.id);
+        } catch (e) {
+          console.error("[session] recorder start failed", e);
+        }
+      })();
     }
-  }, [interviewState]);
+  }, [interviewState, currentQuestion?.id]);
 
   // This function is called by the CountdownTimer when it hits zero
-  const handleTimerComplete = () => {
+  // Timer complete calls stop() and waits for the file
+  const handleTimerComplete = async () => {
     if (interviewState === "listening") {
-      recorderRef.current?.stop().then(handleAudioComplete);
+      try {
+        const file = await recorderRef.current?.stop();
+        await handleAudioComplete(file ?? null);
+      } catch (e) {
+        console.error("[session] recorder stop/handle failed", e);
+        setError("Recording failed. Please try again.");
+        setState("asking");
+      }
     }
   };
   
   // Go from "asking" (typewriter) to "listening" when text is done
   const handleTypewriterComplete = () => {
     if (interviewState === "asking") {
-      // toast("Prepare to answer..."); // <-- REMOVED per request
       // Add a 2-second pause before listening
       setTimeout(() => {
         setState("listening");
@@ -324,7 +386,7 @@ function InterviewSession() {
       {/* Hidden Audio Recorder Logic */}
       <MinimalAudioRecorder
         ref={recorderRef}
-        onRecordingComplete={handleAudioComplete}
+        // No onRecordingComplete prop
       />
     </div>
   );
@@ -486,93 +548,102 @@ function InterviewConfig() {
 }
 
 /**
- * A minimal, logic-only audio recorder component that is not visible.
- * It's controlled entirely by its parent via a ref.
+ * MinimalAudioRecorder (single-responsibility)
+ * - start(): begins recording
+ * - stop(): returns Promise<File | null> which resolves when recorder stops
+ *
+ * Important: It DOES NOT call a separate onRecordingComplete prop.
+ * The parent must call stop().then(file => ...).
  */
 const MinimalAudioRecorder = React.forwardRef<
-  { start: () => void; stop: () => Promise<File | null> },
-  { onRecordingComplete: (file: File | null) => void }
->(({ onRecordingComplete }, ref) => {
+  { start: () => Promise<void>; stop: () => Promise<File | null> },
+  {}
+>((_, ref) => {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
-  const mimeTypeRef = useRef<string | undefined>();
+  const mimeTypeRef = useRef<string>("audio/webm");
 
+  // Start recording
   const start = async () => {
     try {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error("Media devices are not supported.");
-      }
-      
-      stopStream();
+      stopStream(); // cleanup
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error("Media devices not supported");
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
 
-      streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
-      
-      const supportedType = [
+      const supported = [
         "audio/webm;codecs=opus",
         "audio/webm",
-        "audio/ogg",
-      ].find(type => MediaRecorder.isTypeSupported(type));
-      
-      mimeTypeRef.current = supportedType;
-      
-      const recorder = new MediaRecorder(streamRef.current, { mimeType: supportedType });
-      mediaRecorderRef.current = recorder;
-      chunksRef.current = [];
+        "audio/ogg"
+      ].find((t) => MediaRecorder.isTypeSupported(t));
+      mimeTypeRef.current = supported || "audio/webm";
 
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          chunksRef.current.push(event.data);
-        }
-      };
-      
-      recorder.onstop = () => {
-        const mimeType = mimeTypeRef.current || "audio/webm";
-        const blob = new Blob(chunksRef.current, { type: mimeType });
-        const file = new File([blob], "interview-answer.webm", { type: mimeType });
-        onRecordingComplete(file);
-        stopStream();
+      chunksRef.current = []; // reset chunks every start
+
+      const rec = new MediaRecorder(stream, { mimeType: mimeTypeRef.current });
+      mediaRecorderRef.current = rec;
+
+      rec.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
       };
 
-      recorder.start();
+      // single onstop handler (we won't call parent from here)
+      rec.onstop = () => {
+        // nothing here — stop() resolves the file
+      };
+
+      rec.start();
+      console.debug("[recorder] started; mime:", mimeTypeRef.current);
     } catch (err) {
-      toast.error("Microphone Access Denied", {
-        description: "Please enable microphone permissions in your browser settings to continue.",
-      });
-      onRecordingComplete(null);
+      console.error("[recorder] start failed", err);
+      stopStream();
+      // nothing else — the parent will detect no file on stop
     }
   };
 
-  const stop = (): Promise<File | null> => {
-    return new Promise((resolve) => {
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
-        
-        mediaRecorderRef.current.onstop = () => {
-          const mimeType = mimeTypeRef.current || "audio/webm";
-          const blob = new Blob(chunksRef.current, { type: mimeType });
-          const file = new File([blob], "interview-answer.webm", { type: blob.type });
-          resolve(file);
+  // Stop recording and return File or null
+  const stop = (): Promise<File | null> =>
+    new Promise((resolve) => {
+      const rec = mediaRecorderRef.current;
+      if (rec && rec.state === "recording") {
+        // Setup resolution once, don't override other handlers
+        const cleanupAndResolve = () => {
+          const blob = new Blob(chunksRef.current, { type: mimeTypeRef.current });
+          const file = blob.size > 0 ? new File([blob], "interview-answer.webm", { type: mimeTypeRef.current }) : null;
           stopStream();
+          console.debug("[recorder] stopped; blobSize=", blob.size);
+          resolve(file);
         };
-        mediaRecorderRef.current.stop();
+
+        // Ensure we only attach a single 'onstop' here
+        rec.onstop = cleanupAndResolve;
+        try {
+          rec.stop();
+        } catch (e) {
+          console.warn("[recorder] stop() threw", e);
+          cleanupAndResolve();
+        }
       } else {
-        resolve(null);
+        // Not recording - immediately resolve null
         stopStream();
+        resolve(null);
       }
     });
-  };
-  
+
   const stopStream = () => {
-    streamRef.current?.getTracks().forEach(track => track.stop());
+    try {
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+    } catch (e) {
+      // ignore
+    }
     streamRef.current = null;
     mediaRecorderRef.current = null;
+    chunksRef.current = [];
   };
 
-  React.useImperativeHandle(ref, () => ({
-    start,
-    stop,
-  }));
-  
+  React.useImperativeHandle(ref, () => ({ start, stop }));
+
   useEffect(() => {
     return () => stopStream();
   }, []);

@@ -34,6 +34,16 @@ try:
 except ImportError:
     extract_pdf_text = None
 
+# ---- local Python transcription using SpeechRecognition (ffmpeg -> wav) ----
+import subprocess
+import tempfile
+try:
+    import speech_recognition as sr  # pip install SpeechRecognition
+except ImportError:
+    sr = None
+    print("[BOOT] WARNING: 'SpeechRecognition' not installed. Local transcription will be disabled.")
+
+
 from app.models import Question, AttemptCreate, Attempt, AttemptUpdate
 from fastapi import (
     APIRouter,  # <--- FIX: Added APIRouter here
@@ -59,6 +69,15 @@ from starlette.middleware.gzip import GZipMiddleware
 # NEW: import extra routers (files you added)
 from app.routes_admin import router as admin_router, public_router as admin_public_router
 from app.routes_trainer import router as trainer_router
+
+# NEW: import the recognizer helpers (local module implemented separately)
+# Make sure recognizer.py is in the Python path (same package / project root).
+try:
+    from recognizer import transcribe_audio_bytes, transcribe_wav_path
+except Exception:
+    # If recognizer import fails, we keep going; api_transcribe_local will raise informative errors.
+    transcribe_audio_bytes = None
+    transcribe_wav_path = None
 
 # -------------------- Settings --------------------
 class Settings(BaseSettings):
@@ -111,6 +130,8 @@ if docx is None:
     print("[BOOT] WARNING: 'python-docx' not installed. DOCX resume parsing will be disabled.")
 if extract_pdf_text is None:
     print("[BOOT] WARNING: 'pdfminer.six' not installed. PDF resume parsing will be disabled.")
+if transcribe_audio_bytes is None:
+    print("[BOOT] WARNING: 'recognizer' module not importable; local transcription endpoints will return 501.")
 
 # -------------------- Logging --------------------
 logger = logging.getLogger("intervue")
@@ -1355,6 +1376,128 @@ async def api_transcribe(request: Request, file: UploadFile = File(...)):
         "transcript": transcript_text,
     }
 
+
+#
+# --- ⬇️ NEW LOCAL TRANSCRIPTION ENDPOINT ⬇️ ---
+#
+def _convert_to_wav_ffmpeg(src_path: Path, target_samplerate: int = 16000) -> Path:
+    """
+    Convert input audio (webm/ogg/mp3) to 16k mono wav using ffmpeg.
+    Returns path to converted WAV (new file) or raises on failure.
+    """
+    wav_path = src_path.with_suffix(".wav")
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i", str(src_path),
+        "-ar", str(target_samplerate),
+        "-ac", "1",
+        "-c:a", "pcm_s16le",
+        str(wav_path)
+    ]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+        return wav_path
+    except Exception as e:
+        # If conversion fails, re-raise with context
+        raise RuntimeError(f"ffmpeg conversion failed: {e}")
+
+@app.post(
+    "/api/transcribe_local",
+    tags=["audio"],
+    dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)],
+)
+async def api_transcribe_local(
+    file: UploadFile = File(...),
+    session_id: Optional[str] = Form(None),
+    question_id: Optional[str] = Form(None)
+):
+    """
+    Transcribe an uploaded audio file using local recognizers.
+    - tries `transcribe_audio_bytes` from recognizer.py first (passes raw bytes),
+      then falls back to converting to WAV and using file-based `transcribe_wav_path`.
+    - saves transcripts to transcripts.jsonl (same as OpenAI flow).
+    Returns: { ok, id, transcript, engine }
+    """
+    if not file or not (file.content_type or "").startswith("audio/"):
+        raise HTTPException(status_code=400, detail="Must upload audio/* file")
+        
+    # Fail early if recognizer module missing
+    if transcribe_audio_bytes is None:
+        raise HTTPException(status_code=501, detail="Local recognizer not available on server.")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty upload")
+
+    uploads_dir = _root() / "data" / "uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = Path(file.filename or "").suffix or mimetypes.guess_extension(file.content_type or "") or ".bin"
+    fname = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex}{ext}"
+    in_path = uploads_dir / fname
+    with in_path.open("wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+
+    # Attempt to transcribe using recognizer.transcribe_audio_bytes first
+    transcript_text = ""
+    engine_used = "none"
+    try:
+        try:
+            # prefer bytes-based flow (recognizer will write a temp file internally)
+            transcript_text, engine_used = transcribe_audio_bytes(data, engine_priority=("sphinx", "google"))
+        except Exception as e_bytes:
+            # If bytes-based failed, try converting to WAV and using file-based helper
+            _log_json("warning", event="transcribe_local.bytes_failed", error=str(e_bytes), file=str(in_path))
+            try:
+                wav_path = _convert_to_wav_ffmpeg(in_path)
+                if transcribe_wav_path:
+                    transcript_text, engine_used = transcribe_wav_path(wav_path, engine_priority=("sphinx", "google"))
+                else:
+                    transcript_text, engine_used = None, "none"
+            except Exception as ex_wav:
+                _log_json("error", event="transcribe_local.wav_failed", error=str(ex_wav), file=str(in_path))
+                # bubble up a friendly HTTPException
+                raise HTTPException(status_code=502, detail=f"Local transcription failed: {ex_wav}")
+    except HTTPException:
+        # pass through HTTPException above
+        raise
+    except ImportError:
+        raise HTTPException(status_code=501, detail="SpeechRecognition not installed on server.")
+    except Exception as e:
+        _log_json("error", event="transcribe_local.unexpected_failure", error=str(e), file=str(in_path))
+        raise HTTPException(status_code=500, detail=f"Failed to transcribe: {e}")
+
+    # Persist transcript as you do for OpenAI path
+    tid = str(uuid.uuid4())
+    _append_transcript_jsonl(
+        Transcript(
+            id=tid,
+            filename=str(in_path.name),
+            original_filename=(getattr(file, "filename", None) or in_path.name),
+            content_type=(getattr(file, "content_type", None) or "audio/*"),
+            size_bytes=len(data),
+            transcript=transcript_text or "",
+            created=datetime.now(timezone.utc),
+            question_id=question_id,
+        )
+    )
+
+    return {
+        "ok": True,
+        "id": tid,
+        "filename": str(in_path.name),
+        "size_bytes": len(data),
+        "content_type": file.content_type,
+        "transcript": transcript_text,
+        "engine": engine_used,
+    }
+#
+# --- ⬆️ END NEW LOCAL TRANSCRIPTION ENDPOINT ⬆️ ---
+#
+
 # -------------------- Auth / Password routers (existing) --------------------
 from app.routers import password
 from app.routers.auth import router as oauth_router
@@ -1377,6 +1520,8 @@ interview_router = APIRouter(
     dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)],
 )
 
+# [ ... contents of main.py above this function ... ]
+
 @interview_router.post("/start")
 async def interview_start(
     role: str = Form(...),
@@ -1397,10 +1542,56 @@ async def interview_start(
         # Proceed anyway, just with less context
         resume_text = f"Resume could not be parsed ({resume_text})."
 
-    # 2. Generate Session ID
+    #
+    # --- ⬇️ MODIFIED BLOCK (with typo fix and logging) ⬇️ ---
+    #
+    # 1) Ask AI to extract up to 3 candidate project names / anchors from resume_text
+    client = _get_openai_client()
+    extract_model = settings.OPENAI_ANALYZE_MODEL or "gpt-4o-mini"
+    
+    extract_prompt = [
+        {"role": "system", "content": "You are an assistant that extracts short project names or notable experiences from a resume. Return JSON list under key 'projects'."},
+        {"role": "user", "content": f"EXTRACT PROJECTS from this resume text (give up to 3 short project names or notable items):\n\n{resume_text}"}
+    ]
+    try:
+        extract_resp = _call_ai(client, extract_model, extract_prompt)
+        projects = extract_resp.get("projects") or []
+        # normalize: ensure strings
+        projects = [p for p in projects if isinstance(p, str)][:3]
+        
+        _log_json("info", event="interview_start.extract_projects.success", count=len(projects), projects=projects)
+
+    except Exception as e:
+        projects = []
+        _log_json("error", event="interview_start.extract_projects.failed", error=str(e))
+    
+    # 2) Build initial question list with an intro + targeted follow-up (if projects found)
+    intro_q = {
+        "id": f"intro-{uuid.uuid4().hex[:8]}",
+        "role": role,
+        # --- ✅ TYPO FIX HERE ---
+        "text": "Please introduce yourself briefly: your background, most recent role, and what you're hoping to get from this interview.",
+        "question_type": "short"
+    }
+    
+    follow_ups = []
+    if projects:
+        # Use first project for targeted follow-up
+        proj = projects[0]
+        follow_ups.append({
+            "id": f"proj-{uuid.uuid4().hex[:8]}",
+            "role": role,
+            "text": f"I see you worked on \"{proj}\" — could you describe that project and your specific contributions to it?",
+            "question_type": "short"
+        })
+    #
+    # --- ⬆️ END MODIFIED BLOCK ⬆️ ---
+    #
+
+    # 2. Generate Session ID (Original step 2)
     session_id = str(uuid.uuid4())
     
-    # 3. Call AI for a *list* of questions
+    # 3. Call AI for a *list* of questions (Original step 3)
     # MODIFIED PROMPT: Asks for a list of 5 questions.
     system_prompt = (
         "You are an expert interviewer for a '{role}' position. "
@@ -1423,7 +1614,7 @@ async def interview_start(
 
     data = _call_ai(client, model, messages)
     
-    # 4. Validate and return
+    # 4. Validate and return (Original step 4)
     questions_data = data.get("questions", [])
     if not isinstance(questions_data, list) or not questions_data:
         _log_json("error", event="interview_start.ai_malformed_response", response=data)
@@ -1449,10 +1640,13 @@ async def interview_start(
     if not validated_questions:
         raise HTTPException(status_code=502, detail="AI failed to generate any valid questions.")
 
+    
     return {
-        "questions": validated_questions, # MODIFIED: Return full list
+        "questions": [intro_q] + follow_ups + validated_questions, # MODIFIED: Prepend intro/follow-up
         "session_id": session_id,
     }
+
+# [ ... rest of main.py ... ]
 
 class InterviewNextIn(BaseModel):
     session_id: str
@@ -1475,101 +1669,77 @@ def interview_next(payload: InterviewNextIn):
         "question": {"id": "end", "role": payload.role, "text": "Flow updated.", "question_type": "short"}
     }
 
-# NEW: Endpoint for batch analysis
-class HistoryTurn(BaseModel):
-    question_text: str
-    answer_transcript: str
+#
+# --- ⬇️ NEW BATCH ANALYSIS ENDPOINT ⬇️ ---
+#
+class SessionPair(BaseModel):
+    question: str
+    transcript: str
 
-class GenerateReportIn(BaseModel):
+class SessionCompleteIn(BaseModel):
     session_id: str
-    history: List[HistoryTurn] # List of { question_text, answer_transcript }
+    pairs: List[SessionPair]  # ordered list of question/transcript objects
+    model: Optional[str] = None
 
-@interview_router.post("/generate_report")
-def interview_generate_report(payload: GenerateReportIn):
+@interview_router.post("/complete")
+def interview_complete(payload: SessionCompleteIn):
     """
-    NEW: Analyzes the entire interview history in a single batch.
-    Saves multiple AnalysisRecord objects and returns an overall summary.
+    Analyze a batch of question/transcript pairs for a session.
+    For each pair we call _analyze_relevance_with_gpt, persist AnalysisRecord,
+    and return aggregate results.
     """
     client = _get_openai_client()
-    model = settings.OPENAI_ANALYZE_MODEL
-    
-    if not payload.history:
-        raise HTTPException(status_code=400, detail="Interview history is empty.")
-
-    # 1. Format history for the AI prompt
-    full_transcript = []
-    for i, turn in enumerate(payload.history):
-        full_transcript.append(f"Q{i+1}: {turn.question_text}")
-        full_transcript.append(f"A{i+1}: {turn.answer_transcript}\n")
-    
-    history_text = "\n".join(full_transcript)
-
-    # 2. Call AI for batch analysis
-    system_prompt = (
-        "You are an expert interview reviewer. "
-        "Here is the full transcript of an interview. "
-        "Your task is to provide a detailed review for *each* question and answer pair, "
-        "and then an 'overall_summary' for the entire performance. "
-        "You MUST respond in the following JSON format: "
-        '{{'
-        '  "overall_summary": "...", '
-        '  "reviews": [ '
-        '    {{ "question_text": "...", "answer_transcript": "...", "score": 0-100, "rationale": "...", "keywords": [], "key_phrases": [] }}, '
-        '    ... '
-        '  ] '
-        '}}'
-    )
-    
-    user_prompt = f"INTERVIEW TRANSCRIPT:\n{history_text}"
-
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
-    ]
-
-    # Use a longer timeout for batch analysis
-    data = _call_ai(client, model, messages, timeout=60_000)
-
-    # 3. Parse response and save analysis records
-    overall_summary = data.get("overall_summary", "Analysis complete.")
-    reviews = data.get("reviews", [])
-    
-    if not isinstance(reviews, list) or not reviews:
-        _log_json("error", event="generate_report.ai_malformed_response", response=data)
-        raise HTTPException(status_code=502, detail="AI failed to generate a valid report.")
-
-    for review in reviews:
-        if not isinstance(review, dict):
+    model = (payload.model or settings.OPENAI_ANALYZE_MODEL or "gpt-4o-mini").strip()
+    out = []
+    for idx, pair in enumerate(payload.pairs):
+        q_text = (pair.question or "").strip()
+        a_text = (pair.transcript or "").strip()
+        if not q_text or not a_text:
+            # skip empty pairs, but still append a placeholder
+            out.append({"index": idx, "ok": False, "reason": "empty question or transcript"})
             continue
-            
-        q_text = review.get("question_text", "Unknown Question")
-        a_text = review.get("answer_transcript", "")
-        
-        # Find the original question text from history if AI omits it
-        if q_text == "Unknown Question":
-             for h in payload.history:
-                if h.answer_transcript == a_text:
-                    q_text = h.question_text
-                    break
 
+        try:
+            data = _analyze_relevance_with_gpt(client, model, q_text, a_text)
+        except HTTPException as he:
+            out.append({"index": idx, "ok": False, "error": str(he.detail)})
+            continue
+        except Exception as e:
+            out.append({"index": idx, "ok": False, "error": str(e)})
+            continue
+
+        # persist as AnalysisRecord
+        aid = str(uuid.uuid4())
         rec = AnalysisRecord(
-            id=str(uuid.uuid4()),
+            id=aid,
             session_id=payload.session_id,
             text_hash=_sha(q_text + "\n" + a_text),
             model=model,
-            score=int(review.get("score", 0)),
-            keywords=review.get("keywords", []),
-            key_phrases=review.get("key_phrases", []),
-            summary=review.get("rationale", "")[:300], # Use rationale as summary
-            rationale=review.get("rationale", "No rationale provided."),
+            score=int(data["relevance_score"]),
+            keywords=[],
+            key_phrases=[],
+            summary=data["rationale"],
+            rationale=f"Matched: {'; '.join(data.get('matched_points', []))}. Missed: {'; '.join(data.get('missed_points', []))}",
             created=datetime.now(timezone.utc),
             question_text=q_text,
             answer_transcript=a_text,
         )
         _append_analysis_jsonl(rec)
 
-    return {"ok": True, "overall_summary": overall_summary}
+        out.append({
+            "index": idx,
+            "ok": True,
+            "analysis_id": aid,
+            "relevance_score": rec.score,
+            "matched_points": data.get("matched_points", []),
+            "missed_points": data.get("missed_points", []),
+            "rationale": data.get("rationale", ""),
+        })
 
+    return {"ok": True, "session_id": payload.session_id, "results": out}
+#
+# --- ⬆️ END NEW BATCH ANALYSIS ENDPOINT ⬆️ #
+# 
 
 # Include the new router
 app.include_router(interview_router)
