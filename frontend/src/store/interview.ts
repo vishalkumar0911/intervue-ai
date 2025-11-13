@@ -15,10 +15,11 @@ export type InterviewState =
   | "ended";      // AI has ended the interview
 
 // Each "turn" in the conversation
+// MODIFIED: Removed 'analysis' field. We only store history now.
 export type InterviewEvent = {
   question: Question;
   transcript: string;
-  analysis: AnalysisResult;
+  // analysis: AnalysisResult; // This is no longer stored per-turn
 };
 
 type InterviewStore = {
@@ -30,10 +31,11 @@ type InterviewStore = {
 
   // --- State Machine ---
   interviewState: InterviewState;
+  allQuestions: Question[]; // NEW: Holds all questions for the session
   currentQuestion: Question | null;
   history: InterviewEvent[];
   error: string | null;
-  attempt: number; // NEW: A counter to force re-renders
+  attempt: number;
 
   // --- Actions ---
   // Setup
@@ -44,10 +46,11 @@ type InterviewStore = {
   // State setters (used by the page logic)
   setSessionId: (id: string) => void;
   setState: (state: InterviewState) => void;
+  setAllQuestions: (questions: Question[]) => void; // NEW
   setCurrentQuestion: (question: Question | null) => void;
   addHistoryEvent: (event: InterviewEvent) => void;
   setError: (error: string | null) => void;
-  incrementAttempt: () => void; // NEW: Action to increment the counter
+  incrementAttempt: () => void;
 
   // Reset
   reset: () => void;
@@ -59,10 +62,11 @@ const initialState = {
   resumeFile: null,
   sessionId: null,
   interviewState: "configuring" as InterviewState,
+  allQuestions: [], // NEW: Initialize
   currentQuestion: null,
   history: [],
   error: null,
-  attempt: 0, // NEW: Initialize counter
+  attempt: 0,
 };
 
 export const useInterviewStore = create<InterviewStore>((set) => ({
@@ -75,11 +79,12 @@ export const useInterviewStore = create<InterviewStore>((set) => ({
 
   setSessionId: (id) => set({ sessionId: id }),
   setState: (state) => set({ interviewState: state }),
+  setAllQuestions: (questions) => set({ allQuestions: questions }), // NEW
   setCurrentQuestion: (question) => set({ currentQuestion: question }),
   addHistoryEvent: (event) =>
     set((state) => ({ history: [...state.history, event] })),
   setError: (error) => set({ error }),
-  incrementAttempt: () => set((state) => ({ attempt: state.attempt + 1 })), // NEW
+  incrementAttempt: () => set((state) => ({ attempt: state.attempt + 1 })),
 
   reset: () => set(initialState),
 }));

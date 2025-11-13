@@ -12,28 +12,27 @@ export type Question = {
   topic?: string | null;
   difficulty?: "easy" | "medium" | "hard" | null;
   
-  // NEW: The type of question, used to set the timer
   question_type?: "short" | "long";
 
-  // optional metadata used by Trainer UI / backend merge
   source?: "core" | "trainer";
   readonly?: boolean | null;
 };
 
-// NEW: This is the AI's response to a 'start' or 'next' call
+// OLD type, no longer used by the 'start' flow
 export type AIQuestionResponse = {
-  // The question the AI wants to ask (now includes question_type)
   question: Question;
-  // 'question' means the interview continues
-  // 'end' means this is the last question
   type: "question" | "end";
-  // The session ID for this interview
   session_id: string;
-  // Optional: The AI's final summary if type is 'end'
   final_summary?: string;
 };
 
-// NEW: This is the result from analyzing a single answer
+// NEW: This is the response from a 'start' call
+export type AIStartResponse = {
+  questions: Question[];
+  session_id: string;
+};
+
+// This is the result from analyzing a single answer
 // This matches the backend model in backend/app/main.py
 export type AnalysisResult = {
   id: string;
@@ -46,11 +45,9 @@ export type AnalysisResult = {
   model: string;
   created: string;
   
-  // NEW: Fields for the final report page
   question_text?: string | null;
   answer_transcript?: string | null;
 
-  // Specific to relevance scoring
   relevance_score?: number;
   matched_points?: string[];
   missed_points?: string[];
@@ -101,7 +98,6 @@ export type Health = {
   last_questions_load_ts: number;
   server_time: number;
 
-  // add these (backend provides them)
   mode?: "open" | "protected";
   questions_size?: number;
   attempts_size?: number;
@@ -134,7 +130,6 @@ const p = (path: string) => (USE_PROXY ? `/api${path}` : path);
 const SHOULD_ATTACH_KEY = !USE_PROXY && !!API_KEY;
 
 const DEFAULT_TIMEOUT = 12_000;
-// NEW: Increase timeout for AI-related calls
 const AI_TIMEOUT = 30_000;
 const DEFAULT_RETRY = 1;
 
@@ -167,7 +162,6 @@ function fetchWithTimeout(
   const id = setTimeout(() => ctrl.abort(), timeoutMs);
   const p = fetch(url, { ...opts, signal: ctrl.signal })
     .catch((e) => {
-      // Network-level errors (DNS, CORS, offline, Abort)
       const name = (e && (e.name || e.code)) || "";
       if (name === "AbortError" || name === "TimeoutError") {
         maybeToast("error", "Request timed out", "Please try again.");
@@ -175,7 +169,6 @@ function fetchWithTimeout(
         (err as any).code = "TIMEOUT";
         throw err;
       }
-      // Other network error
       maybeToast("error", "Network error", "Check your connection and try again.");
       const err = new Error("Network error");
       (err as any).code = "NETWORK";
@@ -183,7 +176,6 @@ function fetchWithTimeout(
     })
     .finally(() => clearTimeout(id));
 
-  // ensure we clear the timer on success too
   return p.finally(() => clearTimeout(id));
 }
 
@@ -233,7 +225,6 @@ async function toError(res: Response): Promise<Error> {
 /** small safe toast helper (avoids SSR issues) */
 function toastSafe(kind: "success" | "error" | "message", text: string) {
   if (typeof window === "undefined") return;
-  // dynamic import avoids loading sonner in SSR or when not needed
   import("sonner").then(({ toast }) => {
     if (kind === "success") toast.success(text);
     else if (kind === "error") toast.error(text);
@@ -284,7 +275,6 @@ async function request<T>(
     attempt++;
     const res = await fetchWithTimeout(urlStr, init, timeout);
 
-    // 2xx fast path
     if (res.ok) {
       const ct = res.headers.get("content-type") || "";
       if (ct.includes("application/json")) return (await res.json()) as T;
@@ -296,14 +286,12 @@ async function request<T>(
       }
     }
 
-    // Friendly messages for common transient states
     if (res.status === 429) {
       toastSafe("error", "Too many requests — please slow down.");
     } else if (res.status === 502 || res.status === 503 || res.status === 504) {
       toastSafe("error", "Backend unavailable — try again in a moment.");
     }
 
-    // retry only idempotent-ish GETs on 5xx or network abort
     if (attempt <= retry && (res.status >= 500 || res.status === 0)) {
       await new Promise((r) => setTimeout(r, 200 * attempt));
       continue;
@@ -326,7 +314,6 @@ async function getCachedRoles(): Promise<string[]> {
   return data;
 }
 
-// force refresh (bypass cache)
 async function getRolesFresh(): Promise<string[]> {
   const data = await request<string[]>(p("/roles"));
   rolesCache = { data, ts: Date.now() };
@@ -431,7 +418,6 @@ export const api = {
         method: "POST",
         body: { role },
       }),
-    // NEW: Wrapper for the GET /api/auth/role?email=... endpoint
     getProfile: (email: string) =>
       request<{ role: string | null }>(p("/auth/role"), {
         query: { email },
@@ -461,7 +447,8 @@ export const api = {
         query: {
           role: params?.role || undefined,
           topic: params?.topic || undefined,
-          difficulty: params?.difficulty ?? undefined, // null => omit
+          difficulty: params?.difficulty ?? undefined,
+      
           include_core: params?.include_core ? "true" : undefined,
         },
       }),
@@ -493,13 +480,12 @@ export const api = {
       role: string,
       interviewType: "technical" | "hr",
       resumeFile: File
-    ): Promise<AIQuestionResponse> => {
+    ): Promise<AIStartResponse> => { // MODIFIED Return Type
       const formData = new FormData();
       formData.append("role", role);
       formData.append("interview_type", interviewType);
       formData.append("resume_file", resumeFile);
 
-      // We use fetch directly for FormData
       const res = await fetchWithTimeout(
         `${API_BASE}${p("/interview/start")}`,
         {
@@ -513,16 +499,16 @@ export const api = {
       );
 
       if (!res.ok) throw await toError(res);
-      return (await res.json()) as AIQuestionResponse;
+      return (await res.json()) as AIStartResponse; // MODIFIED Return Type
     },
 
     /**
-     * Gets the next question from the AI.
+     * Gets the next question from the AI. (No longer used in the new flow)
      */
     next: (
       sessionId: string,
       history: InterviewEvent[],
-      role: string, // Pass role and type for context
+      role: string,
       interviewType: "technical" | "hr"
     ): Promise<AIQuestionResponse> => {
       return request<AIQuestionResponse>(
@@ -532,6 +518,30 @@ export const api = {
           body: { session_id: sessionId, history, role, interview_type: interviewType },
           auth: true,
           timeout: AI_TIMEOUT,
+        }
+      );
+    },
+    
+    /**
+     * NEW: Generates the final report for the entire interview.
+     */
+    generateReport: (
+      sessionId: string,
+      history: InterviewEvent[] // This is the history of { question, transcript }
+    ): Promise<{ ok: boolean; overall_summary: string }> => {
+      return request<{ ok: boolean; overall_summary: string }>(
+        p("/interview/generate_report"), // NEW Proxy endpoint
+        {
+          method: "POST",
+          body: {
+            session_id: sessionId,
+            history: history.map(h => ({
+              question_text: h.question.text, // Send just the text
+              answer_transcript: h.transcript,
+            }))
+          },
+          auth: true,
+          timeout: AI_TIMEOUT * 3, // Give this a long timeout for full analysis
         }
       );
     },
@@ -546,9 +556,6 @@ export const api = {
       const formData = new FormData();
       formData.append("file", file, file.name || "audio.webm");
       
-      // --- FIX IS HERE ---
-      // We build the URL as a string first, *then* call fetch.
-      // We do not use `new URL()` with a relative path.
       let urlStr = `${API_BASE}${p("/transcribe")}`;
       if (questionId) {
         urlStr += `?question_id=${encodeURIComponent(questionId)}`;
@@ -563,7 +570,7 @@ export const api = {
             ...(SHOULD_ATTACH_KEY ? { "x-api-key": API_KEY } : {}),
           },
         },
-        AI_TIMEOUT // Transcription can take time
+        AI_TIMEOUT
       );
 
       if (!res.ok) throw await toError(res);
@@ -571,7 +578,7 @@ export const api = {
     },
 
     /**
-     * Analyzes a transcript against a question.
+     * Analyzes a transcript against a question. (No longer used in the new flow)
      */
     analyze: (
       transcript: string,
@@ -579,7 +586,7 @@ export const api = {
       sessionId: string
     ): Promise<AnalysisResult> => {
       return request<AnalysisResult>(
-        p("/analyze_content"), // Use the existing relevance-scoring endpoint
+        p("/analyze_content"),
         {
           method: "POST",
           body: {
@@ -601,7 +608,7 @@ export const api = {
      */
     listBySession: (sessionId: string): Promise<AnalysisResult[]> => {
       return request<AnalysisResult[]>(p("/analysis"), {
-        query: { session_id: sessionId, limit: "200" }, // Get all for session
+        query: { session_id: sessionId, limit: "200" },
         auth: true,
       });
     },

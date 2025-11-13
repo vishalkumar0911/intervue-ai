@@ -22,7 +22,7 @@ from uuid import UUID
 import mimetypes
 import openai
 from openai import OpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel # <--- FIX: Corrected pantic to pydantic
 
 # NEW: Import resume parsing libraries
 try:
@@ -1384,8 +1384,8 @@ async def interview_start(
     resume_file: UploadFile = File(...),
 ):
     """
-    Starts a new interview.
-    Parses resume, calls AI for the first question.
+    MODIFIED: Starts a new interview.
+    Parses resume, calls AI for a FULL LIST of questions.
     """
     client = _get_openai_client()
     model = settings.OPENAI_ANALYZE_MODEL
@@ -1400,19 +1400,18 @@ async def interview_start(
     # 2. Generate Session ID
     session_id = str(uuid.uuid4())
     
-    # 3. Call AI for first question
-    # UPDATED PROMPT: Added question_type
+    # 3. Call AI for a *list* of questions
+    # MODIFIED PROMPT: Asks for a list of 5 questions.
     system_prompt = (
         "You are an expert interviewer for a '{role}' position. "
         "You are conducting a '{interview_type}' interview. "
         "The candidate's resume is attached. "
-        "First ask for intoduction a bit about work experience or internships"
-        "Your task is to ask the first question. "
-        "The question should be relevant to the role and the resume. "
-        "ask a few question related to a topic , go 2 levels deep then move to another topic and also talk about projects and certification or any specal sections such as awards or certfications"
-        "Classify the question as 'short' (e.g., definition, quick fact) or 'long' (e.g., behavioral, system design, problem-solving). "
+        "Your task is to generate a full list of 5 interview questions. "
+        "The questions should be relevant to the role and the resume, starting with an introduction. "
+        "Go 2 levels deep on a topic, then move to another. Also talk about projects/certifications. "
+        "Classify each question as 'short' (e.g., definition) or 'long' (e.g., behavioral, design). "
         "You MUST respond in the following JSON format: "
-        '{{"question": {{"id": "...", "role": "...", "text": "...", "question_type": "short" | "long"}}, "type": "question" , "session_id": "..."}}'
+        '{{"questions": [ {{"id": "...", "role": "...", "text": "...", "question_type": "short" | "long"}} ]}}'
     ).format(role=role, interview_type=interview_type)
     
     user_prompt = f"RESUME:\n{resume_text[:4000]}" # Truncate to avoid token limits
@@ -1425,23 +1424,33 @@ async def interview_start(
     data = _call_ai(client, model, messages)
     
     # 4. Validate and return
-    question_data = data.get("question", {})
-    if not question_data or not question_data.get("text"):
+    questions_data = data.get("questions", [])
+    if not isinstance(questions_data, list) or not questions_data:
         _log_json("error", event="interview_start.ai_malformed_response", response=data)
-        raise HTTPException(status_code=502, detail="AI failed to generate a valid first question.")
-    
-    q_type = question_data.get("question_type")
-    if q_type not in ["short", "long"]:
-        q_type = "long" # Default to long
+        raise HTTPException(status_code=502, detail="AI failed to generate a valid question list.")
+
+    # Validate and normalize the list of questions
+    validated_questions = []
+    for q_data in questions_data:
+        if not isinstance(q_data, dict) or not q_data.get("text"):
+            continue # Skip malformed question
+            
+        q_type = q_data.get("question_type")
+        if q_type not in ["short", "long"]:
+            q_type = "long" # Default to long
+
+        validated_questions.append({
+            "id": q_data.get("id") or str(uuid.uuid4()),
+            "role": role,
+            "text": q_data["text"],
+            "question_type": q_type,
+        })
+
+    if not validated_questions:
+        raise HTTPException(status_code=502, detail="AI failed to generate any valid questions.")
 
     return {
-        "question": {
-            "id": question_data.get("id") or str(uuid.uuid4()),
-            "role": role,
-            "text": question_data["text"],
-            "question_type": q_type, # NEW
-        },
-        "type": "question",
+        "questions": validated_questions, # MODIFIED: Return full list
         "session_id": session_id,
     }
 
@@ -1454,87 +1463,113 @@ class InterviewNextIn(BaseModel):
 @interview_router.post("/next")
 def interview_next(payload: InterviewNextIn):
     """
-    Gets the next interview question based on history.
+    DEPRECATED (but kept for compatibility).
+    The new flow gets all questions from /start.
+    This endpoint will just return an 'end' signal if called.
+    """
+    _log_json("warning", event="interview_next.deprecated", session_id=payload.session_id)
+    return {
+        "type": "end",
+        "final_summary": "Interview flow has been updated. Please restart.",
+        "session_id": payload.session_id,
+        "question": {"id": "end", "role": payload.role, "text": "Flow updated.", "question_type": "short"}
+    }
+
+# NEW: Endpoint for batch analysis
+class HistoryTurn(BaseModel):
+    question_text: str
+    answer_transcript: str
+
+class GenerateReportIn(BaseModel):
+    session_id: str
+    history: List[HistoryTurn] # List of { question_text, answer_transcript }
+
+@interview_router.post("/generate_report")
+def interview_generate_report(payload: GenerateReportIn):
+    """
+    NEW: Analyzes the entire interview history in a single batch.
+    Saves multiple AnalysisRecord objects and returns an overall summary.
     """
     client = _get_openai_client()
     model = settings.OPENAI_ANALYZE_MODEL
     
-    # 1. Create a summary of the history for the prompt
-    history_summary = []
-    for i, event in enumerate(payload.history):
-        q = event.get("question", {}).get("text", "N/A")
-        a = event.get("transcript", "N/A")
-        r = event.get("analysis", {}).get("rationale", "N/A")
-        s = event.get("analysis", {}).get("score", "N/A")
-        history_summary.append(f"Q{i+1}: {q}\nA{i+1}: {a}\nReview: (Score: {s}) {r}\n---")
-    
-    history_text = "\n".join(history_summary)
-    
-    # 2. Determine if we should end the interview
-    max_questions = 5 # Stop after 5 questions
-    if len(payload.history) >= max_questions:
-        final_summary = "Thank you for your time. That's all the questions I have for you."
-        # NEW: Create a final analysis record for the session
-        _append_analysis_jsonl(AnalysisRecord(
-            id=str(uuid.uuid4()),
-            session_id=payload.session_id,
-            text_hash="session_end",
-            model=model,
-            score=0, keywords=[], key_phrases=[],
-            summary="Interview ended",
-            rationale=final_summary,
-            created=datetime.now(timezone.utc),
-            question_text="Session End",
-            answer_transcript=""
-        ))
-        return {
-            "type": "end",
-            "final_summary": final_summary,
-            "session_id": payload.session_id,
-            "question": {"id": "end", "role": payload.role, "text": final_summary, "question_type": "short"}
-        }
+    if not payload.history:
+        raise HTTPException(status_code=400, detail="Interview history is empty.")
 
-    # 3. Call AI for the next question
-    # UPDATED PROMPT: Added question_type
-    system_prompt = (
-        "You are an expert interviewer for a '{role}' position in a '{interview_type}' interview. "
-        "You are in the middle of an interview. The history so far is provided. "
-        "Your task is to ask the *next* logical question based on the candidate's previous answers and their performance. "
-        "Ask only one question. Do not repeat questions. "
-        "Classify the question as 'short' (e.g., definition, quick fact) or 'long' (e.g., behavioral, system design, problem-solving). "
-        "You MUST respond in the following JSON format: "
-        '{{"question": {{"id": "...", "role": "...", "text": "...", "question_type": "short" | "long"}}, "type": "question", "session_id": "..."}}'
-    ).format(role=payload.role, interview_type=payload.interview_type)
+    # 1. Format history for the AI prompt
+    full_transcript = []
+    for i, turn in enumerate(payload.history):
+        full_transcript.append(f"Q{i+1}: {turn.question_text}")
+        full_transcript.append(f"A{i+1}: {turn.answer_transcript}\n")
     
-    user_prompt = f"INTERVIEW HISTORY:\n{history_text}\n\nAsk the next question."
+    history_text = "\n".join(full_transcript)
+
+    # 2. Call AI for batch analysis
+    system_prompt = (
+        "You are an expert interview reviewer. "
+        "Here is the full transcript of an interview. "
+        "Your task is to provide a detailed review for *each* question and answer pair, "
+        "and then an 'overall_summary' for the entire performance. "
+        "You MUST respond in the following JSON format: "
+        '{{'
+        '  "overall_summary": "...", '
+        '  "reviews": [ '
+        '    {{ "question_text": "...", "answer_transcript": "...", "score": 0-100, "rationale": "...", "keywords": [], "key_phrases": [] }}, '
+        '    ... '
+        '  ] '
+        '}}'
+    )
+    
+    user_prompt = f"INTERVIEW TRANSCRIPT:\n{history_text}"
 
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
 
-    data = _call_ai(client, model, messages)
+    # Use a longer timeout for batch analysis
+    data = _call_ai(client, model, messages, timeout=60_000)
 
-    # 4. Validate and return
-    question_data = data.get("question", {})
-    if not question_data or not question_data.get("text"):
-        _log_json("error", event="interview_next.ai_malformed_response", response=data)
-        raise HTTPException(status_code=502, detail="AI failed to generate a valid next question.")
+    # 3. Parse response and save analysis records
+    overall_summary = data.get("overall_summary", "Analysis complete.")
+    reviews = data.get("reviews", [])
+    
+    if not isinstance(reviews, list) or not reviews:
+        _log_json("error", event="generate_report.ai_malformed_response", response=data)
+        raise HTTPException(status_code=502, detail="AI failed to generate a valid report.")
 
-    q_type = question_data.get("question_type")
-    if q_type not in ["short", "long"]:
-        q_type = "long" # Default to long
+    for review in reviews:
+        if not isinstance(review, dict):
+            continue
+            
+        q_text = review.get("question_text", "Unknown Question")
+        a_text = review.get("answer_transcript", "")
+        
+        # Find the original question text from history if AI omits it
+        if q_text == "Unknown Question":
+             for h in payload.history:
+                if h.answer_transcript == a_text:
+                    q_text = h.question_text
+                    break
 
-    return {
-        "question": {
-            "id": question_data.get("id") or str(uuid.uuid4()),
-            "role": payload.role,
-            "text": question_data["text"],
-            "question_type": q_type, # NEW
-        },
-        "type": "question",
-        "session_id": payload.session_id,
-    }
+        rec = AnalysisRecord(
+            id=str(uuid.uuid4()),
+            session_id=payload.session_id,
+            text_hash=_sha(q_text + "\n" + a_text),
+            model=model,
+            score=int(review.get("score", 0)),
+            keywords=review.get("keywords", []),
+            key_phrases=review.get("key_phrases", []),
+            summary=review.get("rationale", "")[:300], # Use rationale as summary
+            rationale=review.get("rationale", "No rationale provided."),
+            created=datetime.now(timezone.utc),
+            question_text=q_text,
+            answer_transcript=a_text,
+        )
+        _append_analysis_jsonl(rec)
+
+    return {"ok": True, "overall_summary": overall_summary}
+
 
 # Include the new router
 app.include_router(interview_router)

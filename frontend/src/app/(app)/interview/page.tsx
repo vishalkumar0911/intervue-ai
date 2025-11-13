@@ -1,7 +1,7 @@
 // frontend/src/app/(app)/interview/page.tsx
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react"; // FIX 1: Added useMemo
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
@@ -12,7 +12,7 @@ import RequireRole from "@/components/auth/RequireRole";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/Card";
 import RoleSelect from "@/components/RoleSelect";
-import { api, AIQuestionResponse, AnalysisResult, Question, TranscribeResult } from "@/lib/api";
+import { api, Question, TranscribeResult } from "@/lib/api";
 import { useInterviewStore } from "@/store/interview";
 
 // --- New Components ---
@@ -40,7 +40,6 @@ function Typewriter({ text, onComplete }: { text: string; onComplete: () => void
       }
     }
     
-    // Start the typing with a setTimeout.
     timer.current = setTimeout(type, Math.max(20, 100 - text.length));
 
     return () => {
@@ -137,6 +136,7 @@ function InterviewSession() {
     role,
     interviewType,
     attempt, // Get the new attempt counter
+    allQuestions, // Get all questions
     setState,
     setCurrentQuestion,
     addHistoryEvent,
@@ -164,7 +164,6 @@ function InterviewSession() {
         description: "Your response was too short. Please try again.",
       });
       
-      // --- FIX 2: Increment attempt counter to force re-render ---
       incrementAttempt(); 
       setState("asking"); // Show question again
       
@@ -181,38 +180,42 @@ function InterviewSession() {
     try {
       // 2. Transcribe
       setState("processing");
-      toast("Transcribing your answer...");
+      // toast("Transcribing your answer..."); // <-- REMOVED per request
       const transcribeResult = await api.interview.transcribe(audioFile, currentQuestion.id);
 
-      // 3. Analyze
-      toast("Analyzing your answer...");
-      const analysisResult = await api.interview.analyze(
-        transcribeResult.transcript,
-        currentQuestion.text,
-        sessionId
-      );
-
-      // 4. Store this "turn"
+      // 3. Store this "turn" locally
       const event = {
         question: currentQuestion,
         transcript: transcribeResult.transcript,
-        analysis: analysisResult,
+        // Analysis is no longer here
       };
-      addHistoryEvent(event); // This increments history.length
+      addHistoryEvent(event);
+      const newHistory = [...history, event]; // Get the newly updated history
 
-      // 5. Get next question
-      toast("Getting next question...");
-      const nextQuestionResponse = await api.interview.next(sessionId, [...history, event], role, interviewType);
+      // 4. Find the next question from our list
+      const nextQuestion = allQuestions[newHistory.length]; // e.g., if history.length is 1, get allQuestions[1]
 
-      if (nextQuestionResponse.type === "end") {
-        // AI ended the interview
-        setCurrentQuestion(nextQuestionResponse.question); // Show the final message
-        setState("ended");
-      } else {
-        // Ask next question
-        setCurrentQuestion(nextQuestionResponse.question);
+      if (nextQuestion) {
+        // 5a. If there is a next question, ask it
+        // toast("Loading next question..."); // <-- REMOVED per request
+        setCurrentQuestion(nextQuestion);
         setState("asking");
-        // We go asking -> (typewriter finishes) -> (pause) -> listening
+        // Flow: asking -> (typewriter) -> (pause) -> listening
+      } else {
+        // 5b. No more questions. End the interview and generate report.
+        toast("Interview complete! Generating your report..."); // <-- KEPT as this is an important final status
+        
+        // This is the new batch analysis call
+        await api.interview.generateReport(sessionId, newHistory);
+        
+        // Set to ended state
+        setState("ended");
+        setCurrentQuestion({
+          id: "end",
+          role: role,
+          text: "Your interview is complete. You can now view your report.",
+          question_type: "short"
+        });
       }
     } catch (err: any) {
       const msg = err.message || "An error occurred.";
@@ -247,8 +250,8 @@ function InterviewSession() {
   // Go from "asking" (typewriter) to "listening" when text is done
   const handleTypewriterComplete = () => {
     if (interviewState === "asking") {
+      // toast("Prepare to answer..."); // <-- REMOVED per request
       // Add a 2-second pause before listening
-      toast("Prepare to answer...");
       setTimeout(() => {
         setState("listening");
       }, 2000); // 2-second pause
@@ -262,7 +265,6 @@ function InterviewSession() {
       <div className="w-full min-h-[120px] flex items-center justify-center">
         <AnimatePresence mode="wait">
           <motion.div
-            // --- FIX 3: Add history.length AND attempt to the key ---
             key={`${currentQuestion?.id}-${history.length}-${attempt}`}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -293,7 +295,6 @@ function InterviewSession() {
       <div className="mt-8 min-h-[52px] flex items-center justify-center">
         {interviewState === "listening" && (
           <CountdownTimer 
-            // --- FIX 4: Add history.length AND attempt to the key ---
             key={`${currentQuestion?.id}-${history.length}-${attempt}`}
             duration={listenDuration}
             onComplete={handleTimerComplete}
@@ -303,7 +304,8 @@ function InterviewSession() {
         {interviewState === "processing" && (
           <Button size="lg" variant="secondary" disabled className="gap-2">
             <Loader2 className="h-5 w-5 animate-spin" />
-            Analyzing...
+            {/* Show a different message on the *final* processing step */}
+            {allQuestions.length > history.length ? "Processing..." : "Finalizing report..."}
           </Button>
         )}
 
@@ -342,6 +344,7 @@ function InterviewConfig() {
     setState,
     setSessionId,
     setCurrentQuestion,
+    setAllQuestions, // Get the action
     setError,
   } = useInterviewStore();
 
@@ -378,10 +381,16 @@ function InterviewConfig() {
     
     try {
       setState("starting");
+      // This response now contains the *full list* of questions
       const response = await api.interview.start(role, interviewType, resumeFile);
       
+      if (!response.questions || response.questions.length === 0) {
+        throw new Error("The AI did not return any questions.");
+      }
+
       setSessionId(response.session_id);
-      setCurrentQuestion(response.question);
+      setAllQuestions(response.questions); // Save all questions to the store
+      setCurrentQuestion(response.questions[0]); // Set just the first question
       setState("asking"); // Move to the "asking" state
       
     } catch (err: any) {
@@ -577,7 +586,6 @@ MinimalAudioRecorder.displayName = "MinimalAudioRecorder";
  */
 export default function InterviewPage() {
   const { user, loading: authLoading } = useAuth();
-  // FIX 5: Removed _load_users() typo
   const { interviewState, error, reset } = useInterviewStore();
   
   useEffect(() => {
