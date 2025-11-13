@@ -11,7 +11,7 @@
     "id": "102455925389132325188",
     "email": "pankajkrg93@gmail.com",
     "name": "Pankaj kumar Gupta",
-    "role": "Student",
+    "role": "Trainer",
     "provider": "google",
     "createdAt": 1758238924
   },
@@ -51,8 +51,8 @@
     "id": "105533097027321565325",
     "email": "contactvishalsingh11@gmail.com",
     "name": "Vishal Kumar",
-    "role": "Student",
-    "provider": "local",
+    "role": "Admin",
+    "provider": "google",
     "createdAt": 1762080258
   },
   "utkarsh@example.com": {

@@ -7,8 +7,15 @@ import React, { useEffect, useMemo, useState, useRef } from "react";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Menu, X, ChevronDown, LogOut } from "lucide-react";
 import { useAuth } from "@/components/auth/AuthProvider";
+// 1. Import RBAC helpers
+import { hasAnyRole, type Role } from "@/lib/rbac";
 
-type Item = { href: string; label: string };
+// Update Item type to include optional role restrictions
+type Item = {
+  href: string;
+  label: string;
+  roles?: Role[];
+};
 
 // ---- NavLink ----
 type NavLinkProps = Item & { active?: boolean; onClick?: () => void };
@@ -35,11 +42,17 @@ function NavLink({ href, label, active = false, onClick }: NavLinkProps) {
   );
 }
 
-const NAV_ITEMS: Item[] = [
-  { href: "/interview", label: "Interview" },
+// 2. Define the comprehensive list of navigation items with role restrictions.
+const ALL_NAV_ITEMS: Item[] = [
+  // Roles list mirrors the comprehensive list from Sidebar for consistency.
+  // No roles = accessible to all authenticated users.
   { href: "/dashboard", label: "Dashboard" },
-  { href: "/analytics", label: "Analytics" },
+  { href: "/interview", label: "Interview", roles: ["Student"] },
+  { href: "/analytics", label: "Analytics", roles: ["Student", "Trainer", "Admin"] },
+  { href: "/bookmarks", label: "Bookmarks", roles: ["Student"] },
   { href: "/settings", label: "Settings" },
+  { href: "/trainer/questions", label: "Trainer", roles: ["Trainer", "Admin"] },
+  { href: "/admin/users", label: "Admin", roles: ["Admin"] },
 ];
 
 function initialsFrom(label?: string) {
@@ -144,14 +157,19 @@ export function Navbar() {
   const { user, logout } = useAuth();
   const [open, setOpen] = useState(false);
 
+  // 3. Filter navigation items based on user role
+  const filteredItems = useMemo(() => {
+    return ALL_NAV_ITEMS.filter((item) => !item.roles || hasAnyRole(user, item.roles));
+  }, [user]);
+
   const items = useMemo(
     () =>
-      NAV_ITEMS.map((i) => ({
+      filteredItems.map((i) => ({
         ...i,
         active:
           pathname === i.href || (i.href !== "/" && pathname.startsWith(i.href + "/")),
       })),
-    [pathname]
+    [pathname, filteredItems]
   );
 
   useEffect(() => {
@@ -194,20 +212,23 @@ export function Navbar() {
 
           {/* Center: primary nav (desktop only) */}
           <nav className="hidden md:flex items-center gap-1" aria-label="Primary">
-            {items.map((i) => (
+            {items.map((i) => ( // 4. Render filtered items
               <NavLink key={i.href} {...i} />
             ))}
           </nav>
 
           {/* Right: CTA + theme + auth */}
           <div className="flex items-center gap-2">
-            <Link
-              href="/interview"
-              className="hidden sm:inline-flex btn-primary"
-              title="Start interview"
-            >
-              Start
-            </Link>
+            {/* 5. Conditionally render desktop "Start" button for Students */}
+            {hasAnyRole(user, ["Student"]) && (
+              <Link
+                href="/interview"
+                className="hidden sm:inline-flex btn-primary"
+                title="Start interview"
+              >
+                Start
+              </Link>
+            )}
             <ThemeToggle />
             {user ? (
               <UserMenu />
@@ -228,7 +249,7 @@ export function Navbar() {
         {open && (
           <div className="md:hidden pb-3" id="mobile-menu">
             <nav className="grid gap-1 rounded-2xl surface p-2" aria-label="Mobile">
-              {items.map((i) => (
+              {items.map((i) => ( // 6. Render filtered items in mobile menu
                 <NavLink key={i.href} {...i} onClick={() => setOpen(false)} />
               ))}
 
@@ -280,13 +301,16 @@ export function Navbar() {
                 </>
               )}
 
-              <Link
-                href="/interview"
-                onClick={() => setOpen(false)}
-                className="mt-1 inline-flex btn-primary"
-              >
-                Start interview
-              </Link>
+              {/* 7. Conditionally render mobile "Start interview" link for Students */}
+              {hasAnyRole(user, ["Student"]) && (
+                <Link
+                  href="/interview"
+                  onClick={() => setOpen(false)}
+                  className="mt-1 inline-flex btn-primary"
+                >
+                  Start interview
+                </Link>
+              )}
             </nav>
           </div>
         )}
