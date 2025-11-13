@@ -1,8 +1,6 @@
 "use client";
 
-import { needsRoleOnboarding } from "@/lib/rbac";
 import { useAuth } from "@/components/auth/AuthProvider";
-import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { TrendingUp, Clock, Target, Plus, Trash2, Download } from "lucide-react";
 import { toast } from "sonner";
@@ -119,7 +117,7 @@ const SEED_PREFS_KEY = "dashboard:seedPrefs";
 
 export default function DashboardPage() {
   const { user, loading } = useAuth();
-  const router = useRouter();
+  
   // Load attempts via SWR-like hook
   const {
     data: attempts = [],
@@ -203,11 +201,6 @@ export default function DashboardPage() {
   const [seedRole, setSeedRole] = useState<string>("");
   const [seedDifficulty, setSeedDifficulty] = useState<"" | "easy" | "medium" | "hard">("");
 
-  useEffect(() => {
-    if (!loading && user && needsRoleOnboarding(user)) {
-      router.replace("/onboarding?next=/dashboard");
-    }
-  }, [user, loading, router]);
 
   // hydrate from localStorage
   useEffect(() => {

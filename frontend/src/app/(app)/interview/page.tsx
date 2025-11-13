@@ -1,7 +1,6 @@
 // src/app/(app)/interview/page.tsx
 "use client";
 
-import { needsRoleOnboarding } from "@/lib/rbac";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -117,11 +116,6 @@ export default function InterviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    if (!authLoading && user && needsRoleOnboarding(user)) {
-      router.replace("/onboarding?next=/interview");
-    }
-  }, [authLoading, user, router]);
 
   // Allow deep link role override
   useEffect(() => {

@@ -66,8 +66,8 @@
   "praveenadmin@example.com": {
     "id": "praveenadmin@example.com",
     "email": "praveenadmin@example.com",
-    "name": "praveen admin",
-    "role": null,
+    "name": "praveenadmin",
+    "role": "Admin",
     "provider": "local",
     "createdAt": 1762968913
   },
@@ -99,7 +99,7 @@
     "id": "108332664310796944676",
     "email": "pankaj.gupta@mitwpu.edu.in",
     "name": "Pankaj Kumar Gupta",
-    "role": null,
+    "role": "Admin",
     "provider": "google",
     "createdAt": 1763022840
   },

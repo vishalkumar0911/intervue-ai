@@ -98,6 +98,13 @@ export async function POST(req: NextRequest) {
   // include role even if null (explicit clear)
   if (body.hasOwnProperty("role")) payload.role = role;
 
+  // Determine the target endpoint and method:
+  // 1. If no 'email' is present, assume self-service (POST /auth/role) - unauthenticated users can set their *own* role.
+  // 2. If 'email' is present, assume admin action (PATCH /admin/users) - requires Admin role/API key to set *another* user's role.
+  const isSelfService = !payload.email;
+  const forwardUrl = isSelfService ? `${BACKEND}/auth/role` : `${BACKEND}/admin/users`;
+  const forwardMethod = isSelfService ? "POST" : "PATCH";
+
   // Minimal validation: ensure we have an identity if no email provided
   if (!payload.email) {
     // If we neither have email nor an appJwt/demo cookie, reject.
@@ -108,9 +115,8 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const forwardUrl = `${BACKEND}/admin/users`; // backend admin patch route handles email/id + role
     const res = await fetch(forwardUrl, {
-      method: "PATCH",
+      method: forwardMethod,
       headers: { ...headers, "content-type": "application/json" },
       body: JSON.stringify(payload),
     });
