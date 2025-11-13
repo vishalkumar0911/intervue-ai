@@ -6,8 +6,32 @@ import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { motion } from "framer-motion";
 import { Sparkles } from "lucide-react";
+// ADDED IMPORTS FOR AUTH CHECK
+import { useAuth } from "@/components/auth/AuthProvider";
+import { useRouter } from "next/navigation";
+import { useEffect } from "react";
+// END ADDED IMPORTS
 
 export default function Home() {
+  // ADDED LOGIC TO CHECK SESSION STATUS
+  const { user, loading } = useAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (loading) return;
+    if (user) {
+      // Rule 2: Redirect logged-in users landing on / to dashboard
+      router.replace("/dashboard");
+    }
+  }, [user, loading, router]);
+  
+  // RENDER GUARD: Show placeholder while checking session status
+  if (loading || user) {
+    // We display a placeholder if loading or if 'user' is set (we are redirecting)
+    return <div className="flex h-screen items-center justify-center text-muted-foreground">Redirecting to Dashboard...</div>;
+  }
+  // END ADDED LOGIC
+  
   return (
     <div className="min-h-screen">
       <section className="mx-auto max-w-4xl px-4 py-12 md:py-16">
