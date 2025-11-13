@@ -1673,52 +1673,104 @@ def interview_next(payload: InterviewNextIn):
 # --- ⬇️ NEW BATCH ANALYSIS ENDPOINT ⬇️ ---
 #
 class SessionPair(BaseModel):
-    question: str
-    transcript: str
+    question_text: str  # Renamed from 'question' for clarity
+    answer_transcript: str # Renamed from 'transcript' for clarity
 
 class SessionCompleteIn(BaseModel):
     session_id: str
-    pairs: List[SessionPair]  # ordered list of question/transcript objects
+    history: List[SessionPair]  # Use the clearer model
     model: Optional[str] = None
 
-@interview_router.post("/complete")
-def interview_complete(payload: SessionCompleteIn):
+@interview_router.post("/generate_report") # Renamed endpoint
+def interview_generate_report(payload: SessionCompleteIn): # Renamed function
     """
-    Analyze a batch of question/transcript pairs for a session.
+    Analyze a batch of question/transcript pairs for a session
+    (at the end of the interview).
     For each pair we call _analyze_relevance_with_gpt, persist AnalysisRecord,
     and return aggregate results.
     """
     client = _get_openai_client()
     model = (payload.model or settings.OPENAI_ANALYZE_MODEL or "gpt-4o-mini").strip()
     out = []
-    for idx, pair in enumerate(payload.pairs):
-        q_text = (pair.question or "").strip()
-        a_text = (pair.transcript or "").strip()
-        if not q_text or not a_text:
-            # skip empty pairs, but still append a placeholder
-            out.append({"index": idx, "ok": False, "reason": "empty question or transcript"})
-            continue
+    
+    total_score = 0
+    analyzed_count = 0
 
+    for idx, pair in enumerate(payload.history):
+        q_text = (pair.question_text or "").strip()
+        a_text = (pair.answer_transcript or "").strip()
+        
+        # Don't analyze empty answers, but log them
+        if not a_text:
+            _log_json("info", event="generate_report.skip_empty", session_id=payload.session_id, index=idx)
+            # We create a "0" score record so the report page can still show the question
+            aid = str(uuid.uuid4())
+            rec = AnalysisRecord(
+                id=aid,
+                session_id=payload.session_id,
+                text_hash=_sha(q_text + "\n" + a_text),
+                model=model,
+                score=0,
+                keywords=[],
+                key_phrases=[],
+                summary="No answer provided.",
+                rationale="No answer was recorded for this question.",
+                created=datetime.now(timezone.utc),
+                question_text=q_text,
+                answer_transcript=a_text,
+            )
+            _append_analysis_jsonl(rec)
+            out.append({"index": idx, "ok": True, "analysis_id": aid, "score": 0})
+            continue # Go to next pair
+
+        # Don't analyze the intro question
+        if "introduce yourself" in q_text.lower():
+            _log_json("info", event="generate_report.skip_intro", session_id=payload.session_id, index=idx)
+            aid = str(uuid.uuid4())
+            rec = AnalysisRecord(
+                id=aid,
+                session_id=payload.session_id,
+                text_hash=_sha(q_text + "\n" + a_text),
+                model=model,
+                score=100, # Give 100 for the intro
+                keywords=["introduction"],
+                key_phrases=[],
+                summary="Introduction",
+                rationale="This was the introductory question.",
+                created=datetime.now(timezone.utc),
+                question_text=q_text,
+                answer_transcript=a_text,
+            )
+            _append_analysis_jsonl(rec)
+            out.append({"index": idx, "ok": True, "analysis_id": aid, "score": 100})
+            total_score += 100 # Count it
+            analyzed_count += 1
+            continue # Go to next pair
+
+        # --- This is a real question + answer, analyze it ---
         try:
             data = _analyze_relevance_with_gpt(client, model, q_text, a_text)
         except HTTPException as he:
+            _log_json("error", event="generate_report.analyze_failed", session_id=payload.session_id, index=idx, error=str(he.detail))
             out.append({"index": idx, "ok": False, "error": str(he.detail)})
             continue
         except Exception as e:
+            _log_json("error", event="generate_report.analyze_failed_unhandled", session_id=payload.session_id, index=idx, error=str(e))
             out.append({"index": idx, "ok": False, "error": str(e)})
             continue
 
         # persist as AnalysisRecord
         aid = str(uuid.uuid4())
+        score = int(data.get("relevance_score", 0))
         rec = AnalysisRecord(
             id=aid,
             session_id=payload.session_id,
             text_hash=_sha(q_text + "\n" + a_text),
             model=model,
-            score=int(data["relevance_score"]),
+            score=score,
             keywords=[],
             key_phrases=[],
-            summary=data["rationale"],
+            summary=data.get("rationale", ""), # Use relevance rationale as summary
             rationale=f"Matched: {'; '.join(data.get('matched_points', []))}. Missed: {'; '.join(data.get('missed_points', []))}",
             created=datetime.now(timezone.utc),
             question_text=q_text,
@@ -1730,13 +1782,24 @@ def interview_complete(payload: SessionCompleteIn):
             "index": idx,
             "ok": True,
             "analysis_id": aid,
-            "relevance_score": rec.score,
-            "matched_points": data.get("matched_points", []),
-            "missed_points": data.get("missed_points", []),
-            "rationale": data.get("rationale", ""),
+            "score": score,
         })
+        
+        total_score += score
+        analyzed_count += 1
 
-    return {"ok": True, "session_id": payload.session_id, "results": out}
+    # Calculate final average score
+    avg_score = (
+        round(total_score / analyzed_count) if analyzed_count > 0 else 0
+    )
+    
+    _log_json("info", event="generate_report.complete", session_id=payload.session_id, pairs=len(payload.history), analyzed=analyzed_count, avg_score=avg_score)
+
+    # TODO: We could add a final GPT call here to generate an "overall_summary"
+    # based on all the individual analysis results, but for now, we just
+    # return 'ok'. The report page will fetch the individual records.
+
+    return {"ok": True, "session_id": payload.session_id, "results": out, "overall_score": avg_score}
 #
 # --- ⬆️ END NEW BATCH ANALYSIS ENDPOINT ⬆️ #
 # 
