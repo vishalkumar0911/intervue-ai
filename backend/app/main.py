@@ -15,7 +15,7 @@ import uuid
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Tuple, Optional
+from typing import Any, Callable, Dict, List, Tuple, Optional, Literal
 from uuid import UUID
 
 # NEW: Added imports for AI/Audio features
@@ -24,8 +24,19 @@ import openai
 from openai import OpenAI
 from pydantic import BaseModel
 
+# NEW: Import resume parsing libraries
+try:
+    import docx
+except ImportError:
+    docx = None
+try:
+    from pdfminer.high_level import extract_text as extract_pdf_text
+except ImportError:
+    extract_pdf_text = None
+
 from app.models import Question, AttemptCreate, Attempt, AttemptUpdate
 from fastapi import (
+    APIRouter,  # <--- FIX: Added APIRouter here
     Body,
     Depends,
     FastAPI,
@@ -34,8 +45,9 @@ from fastapi import (
     Query,
     Request,
     Response,
-    File,  # NEW
-    UploadFile,  # NEW
+    File,
+    UploadFile,
+    Form,
 )
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,7 +57,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from starlette.middleware.gzip import GZipMiddleware
 
 # NEW: import extra routers (files you added)
-from app.routes_admin import router as admin_router
+from app.routes_admin import router as admin_router, public_router as admin_public_router
 from app.routes_trainer import router as trainer_router
 
 # -------------------- Settings --------------------
@@ -79,6 +91,9 @@ class Settings(BaseSettings):
     OPENAI_TRANSCRIBE_MODEL: str = "whisper-1"
     OPENAI_ANALYZE_MODEL: str = "gpt-4o-mini" # Merged from 'openai_analyze_model'
 
+    # DEV_MODE: when true, enable demo-only public endpoints (safe for local dev)
+    DEV_MODE: str = "true"
+
     # pydantic-settings v2 config
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -90,6 +105,12 @@ class Settings(BaseSettings):
 settings = Settings()
 print("[BOOT] BACKEND_API_KEY =", repr(settings.BACKEND_API_KEY))  # debug
 print("[BOOT] FRONTEND_URL    =", repr(settings.FRONTEND_URL))     # debug
+print("[BOOT] DEV_MODE        =", repr(settings.DEV_MODE))         # debug
+# NEW: Check for resume parsing libraries
+if docx is None:
+    print("[BOOT] WARNING: 'python-docx' not installed. DOCX resume parsing will be disabled.")
+if extract_pdf_text is None:
+    print("[BOOT] WARNING: 'pdfminer.six' not installed. PDF resume parsing will be disabled.")
 
 # -------------------- Logging --------------------
 logger = logging.getLogger("intervue")
@@ -124,6 +145,7 @@ tags_metadata = [
     # NEW: Added tags
     {"name": "audio", "description": "Audio transcription"},
     {"name": "analysis", "description": "Text analysis"},
+    {"name": "interview", "description": "NEW: Dynamic AI interview flow"}, # NEW TAG
 ]
 
 app = FastAPI(
@@ -357,7 +379,78 @@ def _replace_with_retry(src: Path, dst: Path, attempts: int = 8, delay: float = 
 def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
+# -------------------- NEW: Resume Parsing Helpers --------------------
+def _parse_resume_text(file: UploadFile) -> str:
+    """Extracts text from PDF, DOCX, or TXT file."""
+    content_type = file.content_type or ""
+    filename = file.filename or ""
+    
+    try:
+        if "pdf" in content_type or filename.endswith(".pdf"):
+            if extract_pdf_text:
+                pdf_data = file.file.read()
+                return extract_pdf_text(io.BytesIO(pdf_data))
+            else:
+                return "[PDF parsing disabled: 'pdfminer.six' not installed]"
+        
+        elif "openxmlformats-officedocument.wordprocessingml.document" in content_type or filename.endswith(".docx"):
+            if docx:
+                doc = docx.Document(file.file)
+                return "\n".join([para.text for para in doc.paragraphs if para.text])
+            else:
+                return "[DOCX parsing disabled: 'python-docx' not installed]"
+        
+        elif "text/plain" in content_type or filename.endswith(".txt"):
+            return file.file.read().decode("utf-8")
+            
+        else:
+            return f"[Unsupported resume file type: {content_type}]"
+    except Exception as e:
+        return f"[Error parsing resume: {str(e)}]"
+    finally:
+        file.file.seek(0) # Reset file pointer in case it's read again
+
 # -------------------- NEW: GPT helpers --------------------
+
+# NEW: Helper to get the OpenAI client
+def _get_openai_client() -> OpenAI:
+    api_key = (settings.OPENAI_API_KEY or "").strip()
+    if not api_key:
+        raise HTTPException(
+            status_code=500, detail="OPENAI_API_KEY is missing on the server"
+        )
+    return OpenAI(api_key=api_key)
+
+# NEW: Helper for AI JSON responses
+def _call_ai(client: OpenAI, model: str, messages: List[Dict[str, str]], timeout: int = 20_000) -> Dict[str, Any]:
+    """Calls OpenAI and returns the parsed JSON response."""
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            response_format={"type": "json_object"},
+            temperature=0.2, # Allow for slight creativity
+            timeout=timeout,
+        )
+        raw = resp.choices[0].message.content if resp.choices else "{}"
+        return json.loads(raw or "{}")
+    except openai.AuthenticationError as e:
+        raise HTTPException(status_code=501, detail=f"OpenAI auth failed: {e}")
+    except openai.RateLimitError as e:
+        msg = getattr(e, "message", str(e))
+        if "insufficient_quota" in msg or "quota" in msg.lower():
+            raise HTTPException(status_code=429, detail=f"OpenAI quota exceeded: {msg}")
+        raise HTTPException(status_code=429, detail=f"OpenAI rate limit: {msg}")
+    except openai.APIConnectionError as e:
+        raise HTTPException(status_code=502, detail=f"OpenAI connection error: {e}")
+    except openai.APITimeoutError:
+        raise HTTPException(status_code=504, detail="OpenAI request timed out")
+    except openai.APIError as e:
+        raise HTTPException(status_code=502, detail=f"OpenAI API error: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI generation failed: {e}")
+
+
 def _analyze_text_with_gpt(
     client: OpenAI, model: str, text: str, context: str | None = None
 ) -> dict:
@@ -381,31 +474,15 @@ def _analyze_text_with_gpt(
     if context:
         messages[1]["content"] += f"\n\nCONTEXT (optional):\n{context}"
 
-    try:
-        resp = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            response_format={"type": "json_object"},
-            temperature=0.0,
-        )
-        raw = resp.choices[0].message.content if resp.choices else "{}"
-        data = json.loads(raw or "{}")
+    data = _call_ai(client, model, messages)
 
-        return {
-            "score": int(max(0, min(100, int(data.get("score", 0))))),
-            "keywords": [k for k in (data.get("keywords") or []) if isinstance(k, str)][:8],
-            "key_phrases": [k for k in (data.get("key_phrases") or []) if isinstance(k, str)][:8],
-            "summary": str(data.get("summary", ""))[:400],
-            "rationale": str(data.get("rationale", ""))[:400],
-        }
-    except Exception as e:
-        return {
-            "score": 0,
-            "keywords": [],
-            "key_phrases": [],
-            "summary": "",
-            "rationale": f"Failed to get analysis: {e}",
-        }
+    return {
+        "score": int(max(0, min(100, int(data.get("score", 0))))),
+        "keywords": [k for k in (data.get("keywords") or []) if isinstance(k, str)][:8],
+        "key_phrases": [k for k in (data.get("key_phrases") or []) if isinstance(k, str)][:8],
+        "summary": str(data.get("summary", ""))[:400],
+        "rationale": str(data.get("rationale", ""))[:400],
+    }
 
 
 def _analyze_relevance_with_gpt(
@@ -419,7 +496,7 @@ def _analyze_relevance_with_gpt(
         "Output policy (STRICT):\n"
         "- matched_points: up to 5 bullet fragments, each 2–6 words.\n"
         "- missed_points: up to 5 bullet fragments, each 2–6 words.\n"
-        "- rationale: ≤ 35 words explaining the score.\n"
+        "- rationale: ≤ 35 words explaining the score. This is the 'review'.\n"
         "- JSON ONLY with keys: relevance_score, matched_points, missed_points, rationale."
     )
 
@@ -428,15 +505,7 @@ def _analyze_relevance_with_gpt(
         {"role": "user", "content": f"QUESTION:\n{question}\n\nANSWER:\n{answer}"},
     ]
 
-    resp = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        response_format={"type": "json_object"},
-        temperature=0.0,
-    )
-    raw = resp.choices[0].message.content if resp.choices else "{}"
-    data = json.loads(raw or "{}")
-
+    data = _call_ai(client, model, messages)
     try:
         score = int(data.get("relevance_score", 0))
     except Exception:
@@ -597,6 +666,9 @@ class AnalysisRecord(BaseModel):
     summary: str
     rationale: str
     created: datetime
+    # NEW: Store the question and answer for the report page
+    question_text: Optional[str] = None
+    answer_transcript: Optional[str] = None
 
 
 ANALYSIS_LOCK = threading.Lock()
@@ -643,6 +715,8 @@ def _read_analysis_jsonl(
                         rationale=rec.get("rationale", ""),
                         created=_parse_dt(rec.get("created"))
                         or datetime.now(timezone.utc),
+                        question_text=rec.get("question_text"), # NEW
+                        answer_transcript=rec.get("answer_transcript"), # NEW
                     )
                 )
             except Exception:
@@ -788,7 +862,7 @@ def next_question(
     index: int = Query(0, ge=0),
     difficulty: Optional[str] = Query(None, pattern="^(easy|medium|hard)$"),
 ):
-    """Return item at index (wraps) with optional difficulty filter."""
+    """Return item at index (wraps) with optional difficulty filter.""" 
     hot_reload_if_changed()
     bank = _filtered_bank(role, difficulty)
     if not bank:
@@ -906,6 +980,7 @@ def add_attempt(payload: AttemptCreate = Body(...)):
         # Will typically be caught by Pydantic 422, but keep explicit guard for clarity.
         raise HTTPException(status_code=422, detail="Role is required")
 
+    hot_reload_if_changed() # NEW: ensure roles are loaded
     if role not in QUESTIONS:
         raise HTTPException(status_code=400, detail="Unknown role")
 
@@ -932,7 +1007,7 @@ def add_attempt(payload: AttemptCreate = Body(...)):
     dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)],
 )
 def delete_attempt(attempt_id: UUID):
-    """Delete an attempt by id."""
+    """Delete an attempt by id.""" 
     aid = str(attempt_id)
     found = False
 
@@ -958,6 +1033,8 @@ def update_attempt(attempt_id: UUID, patch: AttemptUpdate):
     """Patch fields of an attempt; ignores invalid field values gracefully."""
     aid = str(attempt_id)
     updated: Optional[Attempt] = None
+    
+    hot_reload_if_changed() # NEW: ensure roles are loaded
 
     def transform(rec: dict):
         nonlocal updated
@@ -1035,18 +1112,12 @@ def api_analyze(payload: AnalyzeIn):
     if not payload.text or not payload.text.strip():
         raise HTTPException(status_code=400, detail="Missing 'text'")
 
-    api_key = (settings.OPENAI_API_KEY or "").strip()
-    if not api_key:
-        raise HTTPException(
-            status_code=500, detail="OPENAI_API_KEY is missing on the server"
-        )
-
+    client = _get_openai_client()
     analyze_model = (
         payload.model
         or settings.OPENAI_ANALYZE_MODEL
         or "gpt-4o-mini"
     ).strip()
-    client = OpenAI(api_key=api_key)
 
     data = _analyze_text_with_gpt(
         client, analyze_model, payload.text, payload.context
@@ -1064,6 +1135,8 @@ def api_analyze(payload: AnalyzeIn):
         summary=data["summary"],          # concise summary
         rationale=data["rationale"],      # concise rationale for score
         created=datetime.now(timezone.utc),
+        question_text=payload.context, # NEW: Store context as question
+        answer_transcript=payload.text, # NEW: Store text as answer
     )
     _append_analysis_jsonl(rec)
 
@@ -1126,18 +1199,12 @@ def api_analyze_content(payload: ContentAnalyzeRequest):
     if not a:
         raise HTTPException(status_code=400, detail="Missing 'answer_transcript'")
 
-    api_key = (settings.OPENAI_API_KEY or "").strip()
-    if not api_key:
-        raise HTTPException(
-            status_code=500, detail="OPENAI_API_KEY is missing on the server"
-        )
+    client = _get_openai_client()
     analyze_model = (
         payload.model
         or settings.OPENAI_ANALYZE_MODEL
         or "gpt-4o-mini"
     ).strip()
-
-    client = OpenAI(api_key=api_key)
 
     try:
         data = _analyze_relevance_with_gpt(client, analyze_model, q, a)
@@ -1152,25 +1219,21 @@ def api_analyze_content(payload: ContentAnalyzeRequest):
         text_hash=_sha(q + "\n" + a),
         model=analyze_model,
         score=int(data["relevance_score"]),
-        keywords=[],
-        key_phrases=[],
+        keywords=[], # Not generated by this prompt
+        key_phrases=[], # Not generated by this prompt
         summary=data["rationale"],  # brief reasoning stored as summary
-        rationale="; ".join(data["matched_points"] + data["missed_points"])[:4000],
+        # Store matched/missed in rationale
+        rationale=f"Matched: {'; '.join(data['matched_points'])}. Missed: {'; '.join(data['missed_points'])}",
         created=datetime.now(timezone.utc),
+        question_text=q, # NEW: Store the question
+        answer_transcript=a, # NEW: Store the answer
     )
     _append_analysis_jsonl(rec)
 
-    return {
-        "ok": True,
-        "id": aid,
-        "session_id": rec.session_id,
-        "model": analyze_model,
-        "relevance_score": data["relevance_score"],
-        "matched_points": data["matched_points"],
-        "missed_points": data["missed_points"],
-        "rationale": data["rationale"],   # short, to the point
-        "created": _to_iso_z(rec.created),
-    }
+    # Return all fields from the saved AnalysisRecord
+    # This ensures the frontend gets the data for the report page
+    return rec.model_dump()
+
 
 # -------------------- Stats --------------------
 @app.get("/stats", tags=["stats"], dependencies=[Depends(rl_read_dep)])
@@ -1233,43 +1296,41 @@ async def api_transcribe(request: Request, file: UploadFile = File(...)):
         f.flush()
         os.fsync(f.fileno())
 
-    api_key = (settings.OPENAI_API_KEY or "").strip()
-    if not api_key:
-        raise HTTPException(
-            status_code=500, detail="OPENAI_API_KEY is missing on the server"
-        )
-
+    client = _get_openai_client()
     model = (settings.OPENAI_TRANSCRIBE_MODEL or "whisper-1").strip()
 
     buf = io.BytesIO(data)
     buf.name = file.filename or f"audio{ext}"
 
     try:
-        client = OpenAI(api_key=api_key)
         result = client.audio.transcriptions.create(
             model=model,
             file=buf,
         )
         transcript_text = getattr(result, "text", "") or ""
-    except openai.AuthenticationError as e:
-        raise HTTPException(status_code=500, detail=f"OpenAI auth failed: {e}") from e
-    except openai.RateLimitError as e:
-        msg = getattr(e, "message", str(e))
-        if "insufficient_quota" in msg or "quota" in msg.lower():
-            raise HTTPException(
-                status_code=429, detail=f"OpenAI quota exceeded: {msg}"
-            )
-        raise HTTPException(status_code=429, detail=f"OpenAI rate limit: {msg}")
-    except openai.APIConnectionError as e:
-        raise HTTPException(
-            status_code=502, detail=f"OpenAI connection error: {e}"
-        ) from e
-    except openai.APIError as e:
-        raise HTTPException(status_code=502, detail=f"OpenAI API error: {e}") from e
     except Exception as e:
+        # Clean up the saved file if transcription fails
+        try:
+            out_path.unlink()
+        except Exception:
+            pass # non-fatal
+        
+        # Re-raise as specific HTTPExceptions
+        if isinstance(e, openai.AuthenticationError):
+            raise HTTPException(status_code=500, detail=f"OpenAI auth failed: {e}")
+        if isinstance(e, openai.RateLimitError):
+            msg = getattr(e, "message", str(e))
+            if "insufficient_quota" in msg or "quota" in msg.lower():
+                raise HTTPException(status_code=429, detail=f"OpenAI quota exceeded: {msg}")
+            raise HTTPException(status_code=429, detail=f"OpenAI rate limit: {msg}")
+        if isinstance(e, openai.APIConnectionError):
+            raise HTTPException(status_code=502, detail=f"OpenAI connection error: {e}")
+        if isinstance(e, openai.APIError):
+            raise HTTPException(status_code=502, detail=f"OpenAI API error: {e}")
+        
         raise HTTPException(
             status_code=500, detail=f"OpenAI transcription failed: {e}"
-        ) from e
+        )
 
     tid = str(uuid.uuid4())
     _append_transcript_jsonl(
@@ -1304,10 +1365,189 @@ app.include_router(password.router,    dependencies=[Depends(require_api_key), D
 app.include_router(oauth_router,       dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)])
 app.include_router(local_auth_router,  dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)])
 
-# -------------------- Role/OAuth + Admin + Trainer routers (NEW) ------------
+# -------------------- Role/OAuth + Admin + Trainer routers (EXISTING) ------------
 # Protect them in the same way (API key + mutate limiter)
 app.include_router(admin_router,   dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)])
 app.include_router(trainer_router, dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)])
+
+# -------------------- NEW: Interview Router --------------------
+interview_router = APIRouter(
+    prefix="/interview",
+    tags=["interview"],
+    dependencies=[Depends(require_api_key), Depends(rl_mutate_dep)],
+)
+
+@interview_router.post("/start")
+async def interview_start(
+    role: str = Form(...),
+    interview_type: Literal["technical", "hr"] = Form(...),
+    resume_file: UploadFile = File(...),
+):
+    """
+    Starts a new interview.
+    Parses resume, calls AI for the first question.
+    """
+    client = _get_openai_client()
+    model = settings.OPENAI_ANALYZE_MODEL
+    
+    # 1. Parse Resume
+    resume_text = _parse_resume_text(resume_file)
+    if resume_text.startswith("["): # Check for parsing errors
+        _log_json("warning", event="interview_start.resume_parse_failed", error=resume_text)
+        # Proceed anyway, just with less context
+        resume_text = f"Resume could not be parsed ({resume_text})."
+
+    # 2. Generate Session ID
+    session_id = str(uuid.uuid4())
+    
+    # 3. Call AI for first question
+    # UPDATED PROMPT: Added question_type
+    system_prompt = (
+        "You are an expert interviewer for a '{role}' position. "
+        "You are conducting a '{interview_type}' interview. "
+        "The candidate's resume is attached. "
+        "First ask for intoduction a bit about work experience or internships"
+        "Your task is to ask the first question. "
+        "The question should be relevant to the role and the resume. "
+        "ask a few question related to a topic , go 2 levels deep then move to another topic and also talk about projects and certification or any specal sections such as awards or certfications"
+        "Classify the question as 'short' (e.g., definition, quick fact) or 'long' (e.g., behavioral, system design, problem-solving). "
+        "You MUST respond in the following JSON format: "
+        '{{"question": {{"id": "...", "role": "...", "text": "...", "question_type": "short" | "long"}}, "type": "question" , "session_id": "..."}}'
+    ).format(role=role, interview_type=interview_type)
+    
+    user_prompt = f"RESUME:\n{resume_text[:4000]}" # Truncate to avoid token limits
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    data = _call_ai(client, model, messages)
+    
+    # 4. Validate and return
+    question_data = data.get("question", {})
+    if not question_data or not question_data.get("text"):
+        _log_json("error", event="interview_start.ai_malformed_response", response=data)
+        raise HTTPException(status_code=502, detail="AI failed to generate a valid first question.")
+    
+    q_type = question_data.get("question_type")
+    if q_type not in ["short", "long"]:
+        q_type = "long" # Default to long
+
+    return {
+        "question": {
+            "id": question_data.get("id") or str(uuid.uuid4()),
+            "role": role,
+            "text": question_data["text"],
+            "question_type": q_type, # NEW
+        },
+        "type": "question",
+        "session_id": session_id,
+    }
+
+class InterviewNextIn(BaseModel):
+    session_id: str
+    history: List[Dict[str, Any]] # List of {question, transcript, analysis}
+    role: str # Added role for context
+    interview_type: Literal["technical", "hr"] # Added type for context
+
+@interview_router.post("/next")
+def interview_next(payload: InterviewNextIn):
+    """
+    Gets the next interview question based on history.
+    """
+    client = _get_openai_client()
+    model = settings.OPENAI_ANALYZE_MODEL
+    
+    # 1. Create a summary of the history for the prompt
+    history_summary = []
+    for i, event in enumerate(payload.history):
+        q = event.get("question", {}).get("text", "N/A")
+        a = event.get("transcript", "N/A")
+        r = event.get("analysis", {}).get("rationale", "N/A")
+        s = event.get("analysis", {}).get("score", "N/A")
+        history_summary.append(f"Q{i+1}: {q}\nA{i+1}: {a}\nReview: (Score: {s}) {r}\n---")
+    
+    history_text = "\n".join(history_summary)
+    
+    # 2. Determine if we should end the interview
+    max_questions = 5 # Stop after 5 questions
+    if len(payload.history) >= max_questions:
+        final_summary = "Thank you for your time. That's all the questions I have for you."
+        # NEW: Create a final analysis record for the session
+        _append_analysis_jsonl(AnalysisRecord(
+            id=str(uuid.uuid4()),
+            session_id=payload.session_id,
+            text_hash="session_end",
+            model=model,
+            score=0, keywords=[], key_phrases=[],
+            summary="Interview ended",
+            rationale=final_summary,
+            created=datetime.now(timezone.utc),
+            question_text="Session End",
+            answer_transcript=""
+        ))
+        return {
+            "type": "end",
+            "final_summary": final_summary,
+            "session_id": payload.session_id,
+            "question": {"id": "end", "role": payload.role, "text": final_summary, "question_type": "short"}
+        }
+
+    # 3. Call AI for the next question
+    # UPDATED PROMPT: Added question_type
+    system_prompt = (
+        "You are an expert interviewer for a '{role}' position in a '{interview_type}' interview. "
+        "You are in the middle of an interview. The history so far is provided. "
+        "Your task is to ask the *next* logical question based on the candidate's previous answers and their performance. "
+        "Ask only one question. Do not repeat questions. "
+        "Classify the question as 'short' (e.g., definition, quick fact) or 'long' (e.g., behavioral, system design, problem-solving). "
+        "You MUST respond in the following JSON format: "
+        '{{"question": {{"id": "...", "role": "...", "text": "...", "question_type": "short" | "long"}}, "type": "question", "session_id": "..."}}'
+    ).format(role=payload.role, interview_type=payload.interview_type)
+    
+    user_prompt = f"INTERVIEW HISTORY:\n{history_text}\n\nAsk the next question."
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    data = _call_ai(client, model, messages)
+
+    # 4. Validate and return
+    question_data = data.get("question", {})
+    if not question_data or not question_data.get("text"):
+        _log_json("error", event="interview_next.ai_malformed_response", response=data)
+        raise HTTPException(status_code=502, detail="AI failed to generate a valid next question.")
+
+    q_type = question_data.get("question_type")
+    if q_type not in ["short", "long"]:
+        q_type = "long" # Default to long
+
+    return {
+        "question": {
+            "id": question_data.get("id") or str(uuid.uuid4()),
+            "role": payload.role,
+            "text": question_data["text"],
+            "question_type": q_type, # NEW
+        },
+        "type": "question",
+        "session_id": payload.session_id,
+    }
+
+# Include the new router
+app.include_router(interview_router)
+
+# -------------------- Public/dev-only endpoints --------------------
+# Expose admin_public_router (contains /auth/role) for local/demo clients.
+# This is deliberately NOT protected by the API key so signup/localStorage users can fetch role.
+# Guard exposure with DEV_MODE environment variable: set DEV_MODE=false to disable.
+if str(settings.DEV_MODE).lower() in {"", "1", "true", "yes", "on"}:
+    app.include_router(admin_public_router)
+    print("[BOOT] Included admin_public_router (dev-only public endpoints)")
+else:
+    print("[BOOT] Skipped admin_public_router (DEV_MODE disabled)")
 
 # -------------------- Developer utilities --------------------
 @app.post(
@@ -1320,9 +1560,10 @@ def dev_seed(
     seed: int = Query(42),
     role: Optional[str] = Query(None, description="Seed only this role; default: all roles"),
 ):
-    """Create synthetic attempts for quick demos/testing."""
+    """Create synthetic attempts for quick demos/testing.""" 
+    hot_reload_if_changed() # NEW: ensure roles are loaded
     rng = random.Random(seed)
-    roles = [role] if role else sorted(QUESTIONS.keys()) or ["Frontend Developer"]
+    roles = [role] if (role and role in QUESTIONS) else sorted(QUESTIONS.keys()) or ["Frontend Developer"]
     if not roles:
         raise HTTPException(status_code=400, detail="No roles available to seed")
 

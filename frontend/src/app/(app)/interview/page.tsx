@@ -1,873 +1,632 @@
-// src/app/(app)/interview/page.tsx
+// frontend/src/app/(app)/interview/page.tsx
 "use client";
 
-import { needsRoleOnboarding } from "@/lib/rbac";
-import { useAuth } from "@/components/auth/AuthProvider";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import React, { useEffect, useMemo, useRef, useState } from "react"; // FIX 1: Added useMemo
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import {
-  Sparkles, Info, Keyboard, RefreshCw,
-  ChevronRight, ChevronLeft, Loader2,
-  CheckCircle2, X, Star, StarOff, Copy,
-  Volume2, VolumeX, Timer, StickyNote,
-} from "lucide-react";
-import { useRouter, useSearchParams } from "next/navigation";
-import Link from "next/link";
+import { motion, AnimatePresence } from "framer-motion";
+import { Loader2, Mic, Sparkles, Upload, FileText, Square, AlertTriangle, Timer } from "lucide-react";
 
-import { Textarea } from "@/components/ui/Textarea";
-import { Button } from "@/components/ui/Button";
-import { Badge } from "@/components/ui/Badge";
-// NEW: Import the AudioRecorder
-import AudioRecorder from "@/components/AudioRecorder";
-import RoleSelect from "@/components/RoleSelect";
-import DifficultySelect from "@/components/DifficultySelect";
-import ShuffleToggle from "@/components/ShuffleToggle";
-import { api, Question, type AttemptCreate } from "@/lib/api";
-import { Card } from "@/components/Card";
-import { useInterviewStore, Difficulty } from "@/store/interview";
-import {
-  isBookmarked as checkBM,
-  upsertBookmark,
-  removeBookmark,
-} from "@/lib/bookmarks";
-import { getNote, setNote, exportNotesCSV } from "@/lib/notes";
+import { useAuth } from "@/components/auth/AuthProvider";
 import RequireRole from "@/components/auth/RequireRole";
+import { Button } from "@/components/ui/Button";
+import { Card } from "@/components/Card";
+import RoleSelect from "@/components/RoleSelect";
+import { api, AIQuestionResponse, AnalysisResult, Question, TranscribeResult } from "@/lib/api";
+import { useInterviewStore } from "@/store/interview";
 
-/* ---------- small utils ---------- */
-function pad(n: number) { return n < 10 ? `0${n}` : String(n); }
-function fmtMMSS(ms: number) {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  const mm = Math.floor(s / 60);
-  const ss = s % 60;
-  return `${pad(mm)}:${pad(ss)}`;
+// --- New Components ---
+
+/**
+ * A simple typewriter effect component
+ */
+function Typewriter({ text, onComplete }: { text: string; onComplete: () => void }) {
+  const [displayText, setDisplayText] = useState("");
+  const index = useRef(0);
+  const timer = useRef<NodeJS.Timeout>();
+
+  useEffect(() => {
+    index.current = 0;
+    setDisplayText("");
+
+    function type() {
+      if (index.current < text.length) {
+        setDisplayText((prev) => prev + text.charAt(index.current));
+        index.current++;
+        const delay = Math.max(20, 100 - text.length); // Faster for longer text
+        timer.current = setTimeout(type, delay);
+      } else {
+        onComplete();
+      }
+    }
+    
+    // Start the typing with a setTimeout.
+    timer.current = setTimeout(type, Math.max(20, 100 - text.length));
+
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, [text, onComplete]);
+
+  return <p className="text-3xl md:text-4xl font-semibold leading-snug">{displayText}</p>;
 }
-const PREFS_KEY = "interview:prefs";
 
-type Prefs = {
-  role?: string;
-  difficulty?: Difficulty;
-  shuffle?: boolean;
-  tts?: boolean;
-  qSecs?: 0 | 15 | 30 | 60;
-};
+/**
+ * A simple audio visualizer
+ */
+function AudioWave({ isListening }: { isListening: boolean }) {
+  return (
+    <div
+      className="relative flex w-full h-24 items-center justify-center overflow-hidden"
+      aria-hidden
+    >
+      {isListening ? (
+        // Animate bars when listening
+        <div className="flex items-center justify-center gap-1.5 h-full">
+          {[...Array(32)].map((_, i) => (
+            <motion.div
+              key={i}
+              className="w-1.5 bg-brand-500"
+              initial={{ height: "4px" }}
+              animate={{ height: ["4px", "60px", "10px", "4px"] }}
+              transition={{
+                duration: 1.5,
+                repeat: Infinity,
+                delay: i * 0.05,
+              }}
+            />
+          ))}
+        </div>
+      ) : (
+        // Static line when not
+        <div className="h-0.5 w-full bg-border" />
+      )}
+    </div>
+  );
+}
 
-// NEW: Type definition for analysis results
-type AnalysisResult = {
-  ok?: boolean;
-  id?: string;
-  session_id?: string;
-  model?: string;
-  created?: string;
-
-  // fields used by the UI
-  score: number;               // 0..100
-  keywords: string[];
-  key_phrases: string[];
-  summary?: string;
-  rationale?: string;
-};
-
-export default function InterviewPage() {
-  const { user, loading: authLoading } = useAuth(); // Renamed to avoid conflict
-  const isPrivileged = user?.role === "Trainer" || user?.role === "Admin";
-
-  const router = useRouter();
-  const search = useSearchParams();
-  const focusId = search.get("focus") || undefined;
-  const roleParam = search.get("role") || undefined;
-
-  // local roles (from API)
-  const [roles, setRoles] = useState<string[]>([]);
-
-  // global interview state (zustand)
-  const role = useInterviewStore((s) => s.role);
-  const difficulty = useInterviewStore((s) => s.difficulty);
-  const shuffle = useInterviewStore((s) => s.shuffle);
-  const bank = useInterviewStore((s) => s.bank);
-  const index = useInterviewStore((s) => s.index);
-  // NEW: Renamed loading to avoid conflict with authLoading
-  const loading = useInterviewStore((s) => s.loading);
-  const error = useInterviewStore((s) => s.error);
-
-  const setRole = useInterviewStore((s) => s.setRole);
-  const setDifficulty = useInterviewStore((s) => s.setDifficulty);
-  const setShuffle = useInterviewStore((s) => s.setShuffle);
-  const setBank = useInterviewStore((s) => s.setBank);
-  const setIndex = useInterviewStore((s) => s.setIndex);
-  const setLoading = useInterviewStore((s) => s.setLoading);
-  const setError = useInterviewStore((s) => s.setError);
-  const next = useInterviewStore((s) => s.next);
-  const resetStore = useInterviewStore((s) => s.reset);
-
-  /* ------ persisted preferences ------ */
-  const [prefs, setPrefs] = useState<Prefs>({ qSecs: 0, tts: false });
+// A component to show a countdown timer
+function CountdownTimer({ duration, onComplete }: { duration: number; onComplete: () => void }) {
+  const [remaining, setRemaining] = useState(duration);
+  const timerRef = useRef<NodeJS.Timeout>();
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete; // Keep ref updated
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(PREFS_KEY);
-      if (raw) {
-        const p = JSON.parse(raw) as Prefs;
-        setPrefs((prev) => ({ ...prev, ...p }));
-        if (!role && p.role) setRole(p.role);
-        if (p.difficulty !== undefined) setDifficulty(p.difficulty);
-        if (typeof p.shuffle === "boolean") setShuffle(p.shuffle);
-      }
-    } catch {}
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    setRemaining(duration); // Reset timer on duration change
 
-  useEffect(() => {
-    if (!authLoading && user && needsRoleOnboarding(user)) {
-      router.replace("/onboarding?next=/interview");
-    }
-  }, [authLoading, user, router]);
-
-  // Allow deep link role override
-  useEffect(() => {
-    if (roleParam) setRole(roleParam);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roleParam]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(
-        PREFS_KEY,
-        JSON.stringify({ role, difficulty, shuffle, tts: prefs.tts, qSecs: prefs.qSecs ?? 0 })
-      );
-    } catch {}
-  }, [role, difficulty, shuffle, prefs.tts, prefs.qSecs]);
-
-  // Track session time
-  const startedAtRef = useRef<number>(Date.now());
-  const [now, setNow] = useState<number>(Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-  const elapsed = now - startedAtRef.current;
-
-  // per-question countdown
-  const endRef = useRef<number | null>(null);
-  const remaining = prefs.qSecs ? Math.max(0, (endRef.current ?? Date.now()) - now) : 0;
-
-  useEffect(() => {
-    if (!prefs.qSecs || loading || !bank.length) return;
-    if (remaining === 0 && endRef.current) {
-      next();
-      endRef.current = Date.now() + prefs.qSecs * 1000;
-      toast.message("Auto next", { description: `#${index + 2} of ${bank.length}` });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [remaining, prefs.qSecs, bank.length, loading]);
-
-  // load roles once
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const r = await api.roles();
-        if (alive) setRoles(r);
-      } catch {
-        if (alive) {
-          const msg = "Failed to load roles. Is the backend running on :8000?";
-          setError(msg);
-          toast.error(msg);
+    timerRef.current = setInterval(() => {
+      setRemaining((prev) => {
+        const next = prev - 1000;
+        if (next <= 0) {
+          clearInterval(timerRef.current);
+          onCompleteRef.current(); // Call the latest onComplete
+          return 0;
         }
-      }
-    })();
-    return () => { alive = false; };
-  }, [setError]);
-
-  // fetch bank whenever filters change
-  const fetchBank = useCallback(async () => {
-    if (!role) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const list = await api.questions({
-        role,
-        limit: 50,
-        difficulty: (difficulty || undefined) as "easy" | "medium" | "hard" | undefined,
-        shuffle,
+        return next;
       });
+    }, 1000);
 
-      const useList = (list.length === 0 && difficulty)
-        ? await api.questions({ role, limit: 50, shuffle })
-        : list;
+    return () => clearInterval(timerRef.current);
+  }, [duration]);
 
-      setBank(useList);
-      setIndex(0);
-      toast.success(`Loaded ${useList.length} question${useList.length === 1 ? "" : "s"}.`);
+  const minutes = Math.floor(remaining / 60000);
+  const seconds = Math.floor((remaining % 60000) / 1000);
 
-      startedAtRef.current = Date.now();
-      setNow(Date.now());
-      if (prefs.qSecs) endRef.current = Date.now() + prefs.qSecs * 1000;
+  return (
+    <div className="flex items-center gap-2 rounded-full bg-muted px-4 py-2 text-lg font-medium text-muted-foreground">
+      <Timer className="h-5 w-5" />
+      <span>
+        {String(minutes).padStart(2, '0')}:{String(seconds).padStart(2, '0')}
+      </span>
+    </div>
+  );
+}
 
-    } catch {
-      setError("Could not fetch questions.");
-      toast.error("Could not fetch questions.");
-    } finally {
-      setLoading(false);
+
+/**
+ * The main AI "chat" interface
+ */
+function InterviewSession() {
+  const router = useRouter();
+  const {
+    interviewState,
+    currentQuestion,
+    sessionId,
+    history,
+    role,
+    interviewType,
+    attempt, // Get the new attempt counter
+    setState,
+    setCurrentQuestion,
+    addHistoryEvent,
+    setError,
+    incrementAttempt, // Get the new action
+  } = useInterviewStore();
+
+  const recorderRef = useRef<{ start: () => void; stop: () => Promise<File | null> }>(null);
+  
+  // Calculate duration based on the question type from the AI
+  const listenDuration = useMemo(() => {
+    if (currentQuestion?.question_type === "short") {
+      return 30000; // 30 seconds
     }
-  }, [role, difficulty, shuffle, setBank, setIndex, setError, setLoading, prefs.qSecs]);
+    // Default to 60 seconds for "long" or if type is undefined
+    return 60000; // 60 seconds
+  }, [currentQuestion?.question_type]);
 
-  useEffect(() => { fetchBank(); }, [fetchBank]);
-
-  // derived current
-  const current: Question | null = useMemo(() => bank[index] ?? null, [bank, index]);
-
-  // jump to focus= question id (deep link)
-  useEffect(() => {
-    if (!focusId || !bank.length) return;
-    const i = bank.findIndex((q) => q.id === focusId);
-    if (i >= 0) setIndex(i);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusId, bank.length]);
-
-  /* ---------------- Bookmarks ---------------- */
-  const bookmarked = checkBM(current?.id);
-
-  function toggleBookmark() {
-    if (!current) return;
-    if (bookmarked) {
-      removeBookmark(current.id);
-      toast("Removed bookmark");
-    } else {
-      upsertBookmark({
-        id: current.id,
-        role: current.role,
-        text: current.text,
-        topic: current.topic ?? null,
-        difficulty: (current.difficulty as any) ?? null,
-        created: Date.now(),
+  // This is the core audio processing loop
+  const handleAudioComplete = async (audioFile: File | null) => {
+    
+    // 1. Check for inaudible audio
+    if (!audioFile || audioFile.size < 2000) { // 2KB threshold
+      toast.warning("Audio was inaudible", {
+        description: "Your response was too short. Please try again.",
       });
-      toast("Bookmarked");
-    }
-  }
-
-  /* ---------------- TTS ---------------- */
-  function speak(text?: string) {
-    if (!text) return;
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      toast.error("Speech not supported");
+      
+      // --- FIX 2: Increment attempt counter to force re-render ---
+      incrementAttempt(); 
+      setState("asking"); // Show question again
+      
+      // Wait for "asking" state to render, then set to "listening"
+      setTimeout(() => setState("listening"), 2000); // 2-second pause
       return;
     }
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
-  }
-  function cancelSpeech() {
-    if (typeof window !== "undefined" && "speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
+
+    if (!currentQuestion || !sessionId) {
+      setError("Session error. Please restart.");
+      return;
     }
-  }
-  useEffect(() => {
-    if (!prefs.tts) return;
-    if (current?.text) speak(current.text);
-    return () => cancelSpeech();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [index, current?.id, prefs.tts]);
 
-  /* ---------------- Notes ---------------- */
-  const [notesOpen, setNotesOpen] = useState(false);
-  const [note, setNoteState] = useState("");
-  // load note on question change
-  useEffect(() => {
-    setNoteState(getNote(current?.id));
-  }, [current?.id]);
-  // debounce save
-  useEffect(() => {
-    if (!current?.id) return;
-    const id = setTimeout(() => setNote(current.id!, note), 300);
-    return () => clearTimeout(id);
-  }, [note, current?.id]);
+    try {
+      // 2. Transcribe
+      setState("processing");
+      toast("Transcribing your answer...");
+      const transcribeResult = await api.interview.transcribe(audioFile, currentQuestion.id);
 
-  // keyboard
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (loading || !bank.length) return;
-      if (["n", "N", "ArrowRight"].includes(e.key)) {
-        e.preventDefault(); cancelSpeech();
-        next(); if (prefs.qSecs) endRef.current = Date.now() + prefs.qSecs * 1000;
-        toast.message("Next question", { description: `#${index + 2} of ${bank.length}` });
-      } else if (["p", "P", "ArrowLeft"].includes(e.key)) {
-        e.preventDefault(); cancelSpeech();
-        setIndex((index - 1 + bank.length) % bank.length);
-        if (prefs.qSecs) endRef.current = Date.now() + prefs.qSecs * 1000;
-        toast.message("Previous question", { description: `#${index} of ${bank.length}` });
+      // 3. Analyze
+      toast("Analyzing your answer...");
+      const analysisResult = await api.interview.analyze(
+        transcribeResult.transcript,
+        currentQuestion.text,
+        sessionId
+      );
+
+      // 4. Store this "turn"
+      const event = {
+        question: currentQuestion,
+        transcript: transcribeResult.transcript,
+        analysis: analysisResult,
+      };
+      addHistoryEvent(event); // This increments history.length
+
+      // 5. Get next question
+      toast("Getting next question...");
+      const nextQuestionResponse = await api.interview.next(sessionId, [...history, event], role, interviewType);
+
+      if (nextQuestionResponse.type === "end") {
+        // AI ended the interview
+        setCurrentQuestion(nextQuestionResponse.question); // Show the final message
+        setState("ended");
+      } else {
+        // Ask next question
+        setCurrentQuestion(nextQuestionResponse.question);
+        setState("asking");
+        // We go asking -> (typewriter finishes) -> (pause) -> listening
       }
+    } catch (err: any) {
+      const msg = err.message || "An error occurred.";
+      setError(msg);
+      toast.error("Interview Error", { description: msg });
+      
+      // Set state to "ended" and show an error message
+      setState("ended");
+      setCurrentQuestion({
+        id: "error",
+        role: role,
+        text: `An error occurred: ${msg}. Your interview has ended.`,
+        question_type: "short"
+      });
     }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, bank.length, next, index, setIndex, prefs.qSecs]);
-
-  // reset session
-  const onReset = useCallback(() => {
-    cancelSpeech();
-    resetStore();
-    fetchBank();
-    toast.info("Session reset");
-  }, [resetStore, fetchBank]);
-
-  // ---------- Complete/Save flow ----------
-  const [completeOpen, setCompleteOpen] = useState(false);
-  const [score, setScore] = useState(75);
-  
-  // NEW: === Transcript & Analysis state ===
-  const [lastTranscript, setLastTranscript] = useState<string | null>(null);
-  const [lastMeta, setLastMeta] = useState<{ filename?: string; size_bytes?: number; content_type?: string } | null>(null);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-
-  const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
-
-  const [analyzing, setAnalyzing] = useState(false);
-  const [analysisError, setAnalysisError] = useState<string | null>(null);
-  const [sessionId] = useState(() => crypto.randomUUID());
-
-  // Optional: pass a question/rubric to improve the relevance score
-  const [context, setContext] = useState("");
-  
-  const tryPrev = () => {
-    cancelSpeech();
-    setIndex((index - 1 + bank.length) % bank.length);
-    if (prefs.qSecs) endRef.current = Date.now() + prefs.qSecs * 1000;
   };
 
-  function scorePill(n: number) {
-    return n >= 80
-      ? "bg-emerald-500/15 text-emerald-700 ring-emerald-400/30 dark:text-emerald-200"
-      : n >= 50
-      ? "bg-amber-500/15 text-amber-700 ring-amber-400/30 dark:text-amber-200"
-      : "bg-rose-500/15 text-rose-700 ring-rose-400/30 dark:text-rose-200";
-  }
-
-  async function saveAttempt() {
-    if (!role) { toast.error("Pick a role first"); return; }
-    const minutes = Math.max(1, Math.round((Date.now() - startedAtRef.current) / 60000));
-    const payload: AttemptCreate = {
-      role,
-      score,
-      duration_min: minutes,
-      difficulty: (difficulty || undefined) as any,
-      // omit date -> server sets UTC now()
-    };
-
-    try {
-      await api.createAttempt(payload);
-      toast.success("Session saved");
-      setCompleteOpen(false);
-      resetStore();
-      router.push("/dashboard");
-    } catch { toast.error("Failed to save session"); }
-  }
-
-  // NEW: Handler for audio upload
-  async function sendRecordingToBackend(file: File) {
-    setUploadError(null);
-    setLastTranscript(null);
-    setAnalysis(null); // clear any previous analysis when uploading a new answer
-
-    const form = new FormData();
-    form.append("file", file, file.name);
-
-    // Call your Next.js route handler (server proxy) — no headers here
-    const res = await fetch("/api/transcribe", { method: "POST", body: form });
-
-    if (!res.ok) {
-      const text = await res.text();
-      setUploadError(`Upload failed (${res.status}): ${text}`);
-      throw new Error(`Upload failed (${res.status}): ${text}`);
+  // Trigger recorder when state changes to "listening"
+  useEffect(() => {
+    if (interviewState === "listening") {
+      recorderRef.current?.start();
     }
+  }, [interviewState]);
 
-    const json = await res.json();
-    // Expecting { transcript, filename, size_bytes, content_type, id? }
-    setLastTranscript(json?.transcript || "");
-    setLastMeta({
-      filename: json?.filename,
-      size_bytes: json?.size_bytes,
-      content_type: json?.content_type,
+  // This function is called by the CountdownTimer when it hits zero
+  const handleTimerComplete = () => {
+    if (interviewState === "listening") {
+      recorderRef.current?.stop().then(handleAudioComplete);
+    }
+  };
+  
+  // Go from "asking" (typewriter) to "listening" when text is done
+  const handleTypewriterComplete = () => {
+    if (interviewState === "asking") {
+      // Add a 2-second pause before listening
+      toast("Prepare to answer...");
+      setTimeout(() => {
+        setState("listening");
+      }, 2000); // 2-second pause
+    }
+  };
+  
+  return (
+    <div className="mx-auto max-w-3xl w-full flex flex-col items-center">
+      
+      {/* --- 1. Question Text Area --- */}
+      <div className="w-full min-h-[120px] flex items-center justify-center">
+        <AnimatePresence mode="wait">
+          <motion.div
+            // --- FIX 3: Add history.length AND attempt to the key ---
+            key={`${currentQuestion?.id}-${history.length}-${attempt}`}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            transition={{ duration: 0.5 }}
+            className="w-full"
+          >
+            {/* Show Typewriter only when asking */}
+            {interviewState === "asking" && currentQuestion ? (
+              <Typewriter 
+                text={currentQuestion.text} 
+                onComplete={handleTypewriterComplete} 
+              />
+            ) : (
+              // Show static question text for all other active states
+              <p className="text-3xl md:text-4xl font-semibold leading-snug">
+                {currentQuestion?.text}
+              </p>
+            )}
+          </motion.div>
+        </AnimatePresence>
+      </div>
+
+      {/* --- 2. Visualizer Area --- */}
+      <AudioWave isListening={interviewState === "listening"} />
+
+      {/* --- 3. Controls / Status Area --- */}
+      <div className="mt-8 min-h-[52px] flex items-center justify-center">
+        {interviewState === "listening" && (
+          <CountdownTimer 
+            // --- FIX 4: Add history.length AND attempt to the key ---
+            key={`${currentQuestion?.id}-${history.length}-${attempt}`}
+            duration={listenDuration}
+            onComplete={handleTimerComplete}
+          />
+        )}
+
+        {interviewState === "processing" && (
+          <Button size="lg" variant="secondary" disabled className="gap-2">
+            <Loader2 className="h-5 w-5 animate-spin" />
+            Analyzing...
+          </Button>
+        )}
+
+        {interviewState === "ended" && (
+          <Button
+            size="lg"
+            variant="primary"
+            onClick={() => router.push(`/report/${sessionId}`)}
+            className="gap-2"
+          >
+            View Full Report
+          </Button>
+        )}
+      </div>
+
+      {/* Hidden Audio Recorder Logic */}
+      <MinimalAudioRecorder
+        ref={recorderRef}
+        onRecordingComplete={handleAudioComplete}
+      />
+    </div>
+  );
+}
+
+/**
+ * A configuration screen for the user to set up their interview
+ */
+function InterviewConfig() {
+  const {
+    role,
+    interviewType,
+    resumeFile,
+    setRole,
+    setInterviewType,
+    setResumeFile,
+    setState,
+    setSessionId,
+    setCurrentQuestion,
+    setError,
+  } = useInterviewStore();
+
+  const [roles, setRoles] = useState<string[]>([]);
+
+  // Load roles from API
+  useEffect(() => {
+    api.roles().then(setRoles).catch(() => {
+      setError("Could not load roles from server.");
     });
-    return json;
-  }
+  }, [setError]);
 
-  // NEW: Handler for analysis
-  async function analyzeTranscript() {
-    if (!lastTranscript) return;
-    setAnalyzing(true);
-    setAnalysisError(null);
-    setAnalysis(null);
-    try {
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          text: lastTranscript,
-          context,            // optional rubric/question
-          session_id: sessionId,
-        }),
-      });
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(`Analyze failed (${res.status}): ${t}`);
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      // Basic validation
+      if (file.size > 5 * 1024 * 1024) { // 5MB limit
+        toast.error("File is too large", { description: "Please upload a resume under 5MB."});
+        return;
       }
-      const json = await res.json();
-      setAnalysis(json);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setAnalysisError(msg || "Analyze failed");
-    } finally {
-      setAnalyzing(false);
+      if (!["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/plain"].includes(file.type)) {
+        toast.error("Invalid file type", { description: "Please upload a PDF, DOCX, or TXT file."});
+        return;
+      }
+      setResumeFile(file);
     }
-  }
+  };
+  
+  const handleStart = async () => {
+    if (!role || !interviewType || !resumeFile) {
+      toast.error("All fields are required to start.");
+      return;
+    }
+    
+    try {
+      setState("starting");
+      const response = await api.interview.start(role, interviewType, resumeFile);
+      
+      setSessionId(response.session_id);
+      setCurrentQuestion(response.question);
+      setState("asking"); // Move to the "asking" state
+      
+    } catch (err: any) {
+      const msg = err.message || "Failed to start interview.";
+      setError(msg);
+      toast.error("Error", { description: msg });
+      setState("configuring");
+    }
+  };
 
-  function copyQuestion() {
-    if (!current?.text) return;
-    navigator.clipboard.writeText(current.text).then(
-      () => toast.success("Copied"),
-      () => toast.error("Copy failed")
-    );
-  }
-  function setCountdown(sec: 0 | 15 | 30 | 60) {
-    setPrefs((p) => ({ ...p, qSecs: sec }));
-    endRef.current = sec ? Date.now() + sec * 1000 : null;
-  }
+  const canStart = role && interviewType && resumeFile;
+
+  return (
+    <Card className="mx-auto max-w-2xl w-full p-6 space-y-6">
+      <div className="space-y-1">
+        <h2 className="text-2xl font-semibold">Setup your Interview</h2>
+        <p className="text-muted-foreground">
+          The AI will use your resume to ask relevant questions.
+        </p>
+      </div>
+
+      {/* 1. Role Select */}
+      <RoleSelect
+        roles={roles}
+        value={role}
+        onChange={setRole}
+        label="Select your target role"
+      />
+
+      {/* 2. Interview Type */}
+      <div>
+        <label className="mb-1 block text-sm text-muted-foreground">
+          Select interview type
+        </label>
+        <div className="grid grid-cols-2 gap-2">
+          <Button
+            variant={interviewType === "technical" ? "primary" : "outline"}
+            onClick={() => setInterviewType("technical")}
+          >
+            Technical
+          </Button>
+          <Button
+            variant={interviewType === "hr" ? "primary" : "outline"}
+            onClick={() => setInterviewType("hr")}
+          >
+            HR / Behavioral
+          </Button>
+        </div>
+      </div>
+
+      {/* 3. Resume Upload */}
+      <div>
+        <label className="mb-1 block text-sm text-muted-foreground">
+          Upload your resume
+        </label>
+        <label
+          htmlFor="resume-upload"
+          className={`relative flex w-full cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-border p-6 transition hover:bg-muted/50
+          ${resumeFile ? "border-brand-500" : ""}`}
+        >
+          <input
+            id="resume-upload"
+            type="file"
+            className="sr-only"
+            accept=".pdf,.docx,.txt"
+            onChange={handleFileChange}
+          />
+          {resumeFile ? (
+            <div className="flex items-center gap-2 text-brand-500">
+              <FileText className="h-5 w-5" />
+              <span className="font-medium">{resumeFile.name}</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <Upload className="h-5 w-5" />
+              <span>Click to upload (PDF, DOCX, TXT)</span>
+            </div>
+          )}
+        </label>
+      </div>
+      
+      <Button 
+        size="lg" 
+        className="w-full gap-2" 
+        disabled={!canStart || roles.length === 0}
+        onClick={handleStart}
+      >
+        <Sparkles className="h-5 w-5" />
+        Start AI Interview
+      </Button>
+    </Card>
+  );
+}
+
+/**
+ * A minimal, logic-only audio recorder component that is not visible.
+ * It's controlled entirely by its parent via a ref.
+ */
+const MinimalAudioRecorder = React.forwardRef<
+  { start: () => void; stop: () => Promise<File | null> },
+  { onRecordingComplete: (file: File | null) => void }
+>(({ onRecordingComplete }, ref) => {
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
+  const mimeTypeRef = useRef<string | undefined>();
+
+  const start = async () => {
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("Media devices are not supported.");
+      }
+      
+      stopStream();
+
+      streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+      
+      const supportedType = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/ogg",
+      ].find(type => MediaRecorder.isTypeSupported(type));
+      
+      mimeTypeRef.current = supportedType;
+      
+      const recorder = new MediaRecorder(streamRef.current, { mimeType: supportedType });
+      mediaRecorderRef.current = recorder;
+      chunksRef.current = [];
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunksRef.current.push(event.data);
+        }
+      };
+      
+      recorder.onstop = () => {
+        const mimeType = mimeTypeRef.current || "audio/webm";
+        const blob = new Blob(chunksRef.current, { type: mimeType });
+        const file = new File([blob], "interview-answer.webm", { type: mimeType });
+        onRecordingComplete(file);
+        stopStream();
+      };
+
+      recorder.start();
+    } catch (err) {
+      toast.error("Microphone Access Denied", {
+        description: "Please enable microphone permissions in your browser settings to continue.",
+      });
+      onRecordingComplete(null);
+    }
+  };
+
+  const stop = (): Promise<File | null> => {
+    return new Promise((resolve) => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+        
+        mediaRecorderRef.current.onstop = () => {
+          const mimeType = mimeTypeRef.current || "audio/webm";
+          const blob = new Blob(chunksRef.current, { type: mimeType });
+          const file = new File([blob], "interview-answer.webm", { type: blob.type });
+          resolve(file);
+          stopStream();
+        };
+        mediaRecorderRef.current.stop();
+      } else {
+        resolve(null);
+        stopStream();
+      }
+    });
+  };
+  
+  const stopStream = () => {
+    streamRef.current?.getTracks().forEach(track => track.stop());
+    streamRef.current = null;
+    mediaRecorderRef.current = null;
+  };
+
+  React.useImperativeHandle(ref, () => ({
+    start,
+    stop,
+  }));
+  
+  useEffect(() => {
+    return () => stopStream();
+  }, []);
+
+  return null;
+});
+MinimalAudioRecorder.displayName = "MinimalAudioRecorder";
+
+/**
+ * Main Page Component
+ */
+export default function InterviewPage() {
+  const { user, loading: authLoading } = useAuth();
+  // FIX 5: Removed _load_users() typo
+  const { interviewState, error, reset } = useInterviewStore();
+  
+  useEffect(() => {
+    // Reset the store on mount, in case a session was left hanging
+    reset();
+  }, [reset]);
+
+  const renderState = () => {
+    if (authLoading) {
+      return <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />;
+    }
+    
+    if (error) {
+      return (
+        <Card className="mx-auto max-w-2xl w-full p-6 text-center">
+          <AlertTriangle className="h-12 w-12 text-destructive mx-auto" />
+          <h2 className="mt-4 text-xl font-semibold">An Error Occurred</h2>
+          <p className="mt-2 text-muted-foreground">{error}</p>
+          <Button onClick={reset} variant="secondary" className="mt-6">
+            Start Over
+          </Button>
+        </Card>
+      );
+    }
+    
+    switch (interviewState) {
+      case "configuring":
+        return <InterviewConfig />;
+      case "starting":
+        return (
+          <div className="flex flex-col items-center gap-4">
+            <Loader2 className="h-12 w-12 animate-spin text-brand-500" />
+            <p className="text-xl text-muted-foreground">Starting your session...</p>
+          </div>
+        );
+      case "asking":
+      case "listening":
+      case "processing":
+      case "ended":
+        return <InterviewSession />;
+      default:
+        return null;
+    }
+  };
 
   return (
     <RequireRole roles={["Student"]} mode="redirect">
-      <main className="min-h-screen">
-        <section className="mx-auto max-w-5xl px-4 py-10 md:py-14">
-          <div className="mb-6 flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-accent-400" />
-            <h1 className="text-2xl font-semibold text-foreground">Mock Interview</h1>
-          </div>
-
-          <p className="text-sm text-muted-foreground">
-            Pick a role, tweak difficulty, and practice. Your questions load from your local API.
-          </p>
-
-          {/* controls bar */}
-          <div className="mt-6 grid gap-4 md:grid-cols-[2fr_1fr_auto]">
-            <RoleSelect
-              roles={roles}
-              value={role}
-              onChange={(r) => { setRole(r); toast.success(`Role: ${r}`); }}
-            />
-            <DifficultySelect value={difficulty as Difficulty} onChange={setDifficulty} />
-            <div className="flex items-end">
-              <ShuffleToggle
-                checked={shuffle}
-                onChange={(v) => { setShuffle(v); toast.message(v ? "Shuffle on" : "Shuffle off"); }}
-              />
-            </div>
-          </div>
-
-          {/* secondary toolbar */}
-          <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
-            <button
-              onClick={() => {
-                const on = !prefs.tts;
-                setPrefs((p) => ({ ...p, tts: on }));
-                if (on && current?.text) speak(current.text);
-                if (!on) cancelSpeech();
-              }}
-              className={[
-                "inline-flex items-center gap-2 rounded-lg px-3 py-1.5 focus-ring",
-                prefs.tts
-                  ? "bg-brand-500/15 text-foreground ring-1 ring-brand-500/30"
-                  : "bg-secondary text-foreground/80 hover:bg-secondary/80 border border-border"
-              ].join(" ")}
-              title="Toggle speech"
-            >
-              {prefs.tts ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
-              Speak
-            </button>
-
-            <button
-              onClick={copyQuestion}
-              className="inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-1.5 text-foreground/80 hover:bg-secondary/80 focus-ring"
-              title="Copy question"
-            >
-              <Copy className="h-4 w-4" />Copy Ques.
-            </button>
-
-            <button
-              onClick={() => setNotesOpen((v) => !v)}
-              className="inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-1.5 text-foreground/80 hover:bg-secondary/80 focus-ring"
-              title="Notes"
-            >
-              <StickyNote className="h-4 w-4" /> Notes
-            </button>
-
-            <div className="mx-2 h-4 w-px bg-border" />
-
-            <div className="inline-flex items-center gap-1">
-              <Timer className="h-4 w-4 opacity-80" />
-              <span className="text-muted-foreground">Auto-next:</span>
-              {([0, 15, 30, 60] as const).map((sec) => (
-                <button
-                  key={sec}
-                  onClick={() => setCountdown(sec)}
-                  className={[
-                    "rounded-lg border px-2 py-1 text-xs focus-ring",
-                    prefs.qSecs === sec
-                      ? "border-brand-500/30 bg-brand-500/15 text-foreground"
-                      : "border-border bg-secondary text-foreground/80 hover:bg-secondary/80",
-                  ].join(" ")}
-                >
-                  {sec === 0 ? "off" : `${sec}s`}
-                </button>
-              ))}
-              {prefs.qSecs ? (
-                <span className="ml-2 rounded-md bg-muted px-2 py-0.5 text-xs text-foreground/80">
-                  {fmtMMSS(remaining)}
-                </span>
-              ) : null}
-            </div>
-          </div>
-
-          {/* errors */}
-          {error && (
-            <div
-              className="mt-4 flex items-center gap-3 rounded-2xl border p-4 text-sm
-                       border-destructive/40 bg-destructive/10 text-destructive-foreground"
-              role="alert"
-            >
-              <Info className="h-4 w-4" />
-              <span>{error}</span>
-            </div>
-          )}
-
-          {!role && (
-            <Card className="mt-4">
-              <div className="flex items-start gap-3">
-                <Keyboard className="h-5 w-5 text-brand-500 shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-medium text-foreground">Choose a role to begin</p>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Tip: use <kbd className="rounded bg-muted px-1">P</kbd> /
-                    <kbd className="rounded bg-muted px-1">N</kbd> or
-                    <kbd className="rounded bg-muted px-1">←</kbd>
-                    <kbd className="rounded bg-muted px-1">→</kbd> to switch.
-                  </p>
-                </div>
-              </div>
-            </Card>
-          )}
-
-          {/* >>> Enhanced empty-state (role-aware) <<< */}
-          {!loading && role && bank.length === 0 && (
-            <Card className="mt-4">
-              {isPrivileged ? (
-                <div className="flex items-start gap-3">
-                  <Info className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
-                  <div className="space-y-1">
-                    <p className="font-medium text-foreground">No questions found for this filter.</p>
-                    <p className="text-sm text-muted-foreground">
-                      You can add questions in the Trainer UI.
-                    </p>
-                    <div className="pt-2">
-                      <Link href="/trainer/questions" className="inline-flex">
-                        <Button>Go to Trainer Questions</Button>
-                      </Link>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex items-start gap-3">
-                  <Info className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
-                  <div className="space-y-2">
-                    <p className="font-medium text-foreground">No questions match your current filters.</p>
-                    <ul className="list-disc pl-5 text-sm text-muted-foreground space-y-1">
-                      <li>Try a different difficulty (or clear difficulty).</li>
-                      <li>Toggle shuffle off/on.</li>
-                      <li>Pick another role.</li>
-                    </ul>
-                  </div>
-                </div>
-              )}
-            </Card>
-          )}
-
-          {role && (
-            <div className="card p-6 mt-6">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0 flex-1">
-                  <p
-                    aria-live="polite"
-                    className="text-xs uppercase tracking-wide text-brand-700/80 dark:text-brand-300/80"
-                  >
-                    Question {bank.length ? index + 1 : 0}{bank.length ? ` of ${bank.length}` : ""}
-                  </p>
-
-                  <div className="mt-1 min-h-[92px] md:min-h-[112px] lg:min-h-[124px] flex items-start">
-                    <div aria-live="polite" aria-atomic="true" className="w-full">
-                      <AnimatePresence mode="wait">
-                        <motion.h3
-                          key={bank.length ? (bank[index]?.id ?? index) : "empty"}
-                          initial={{ opacity: 0, y: 6 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: -6 }}
-                          transition={{ duration: 0.18 }}
-                          className="text-2xl md:text-3xl font-semibold tracking-tight leading-tight text-foreground"
-                        >
-                          {loading ? (
-                            <span className="inline-flex items-center gap-2 text-muted-foreground">
-                              <Loader2 className="h-4 w-4 animate-spin" /> Loading…
-                            </span>
-                          ) : (
-                            current?.text ?? "No questions."
-                          )}
-                        </motion.h3>
-                      </AnimatePresence>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    {current?.topic && <Badge variant="neutral">Topic: {current.topic}</Badge>}
-                    {current?.difficulty && (
-                      <span
-                        className={[
-                          "inline-flex items-center rounded-xl px-2.5 py-1 text-xs ring-1 ring-border",
-                          current.difficulty === "easy" && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-200",
-                          current.difficulty === "medium" && "bg-amber-500/10 text-amber-700 dark:text-amber-200",
-                          current.difficulty === "hard" && "bg-rose-500/10 text-rose-700 dark:text-rose-200",
-                        ].join(" ")}
-                      >
-                        Difficulty: {current.difficulty}
-                      </span>
-                    )}
-
-                    <button
-                      onClick={toggleBookmark}
-                      className="ml-2 inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-2 py-1 text-foreground/80 hover:bg-secondary/80 focus-ring"
-                      title={bookmarked ? "Remove bookmark" : "Bookmark this question"}
-                    >
-                      {bookmarked ? <Star className="h-4 w-4 text-yellow-500" /> : <StarOff className="h-4 w-4" />}
-                      <span className="text-xs">{bookmarked ? "Bookmarked" : "Bookmark"}</span>
-                    </button>
-                  </div>
-
-                  {/* NEW: ---- Audio practice & recording ---- */}
-                  <div className="mt-4 min-w-0">
-                    <AudioRecorder
-                      filename={`answer-${current?.id || "untitled"}`}
-                      onRecordingComplete={sendRecordingToBackend}
-                    />
-                  </div>
-                  {/* ---- end recorder block ---- */}
-                </div>
-
-                <div className="flex items-center gap-2 shrink-0">
-                  <Button variant="secondary" onClick={onReset} disabled={loading} title="Clear and refetch" className="inline-flex items-center gap-2">
-                    <RefreshCw className="h-4 w-4" /> Reset
-                  </Button>
-                  <Button variant="ghost" onClick={tryPrev} disabled={loading || !bank.length} title="Shortcut: P or ←" className="inline-flex items-center gap-2">
-                    <ChevronLeft className="h-4 w-4" /> Prev
-                  </Button>
-                  <Button
-                    onClick={() => {
-                      cancelSpeech();
-                      next();
-                      if (prefs.qSecs) endRef.current = Date.now() + prefs.qSecs * 1000;
-                      if (bank.length) {
-                        toast.message("Next question", { description: `#${index + 2} of ${bank.length}` });
-                      }
-                    }}
-                    disabled={loading || !bank.length}
-                    title="Shortcut: N or →"
-                    className="inline-flex items-center gap-2"
-                  >
-                    {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronRight className="h-4 w-4" />} Next
-                  </Button>
-                </div>
-              </div>
-
-              {/* progress */}
-              <div className="mt-6 h-2 w-full overflow-hidden rounded-full bg-muted">
-                <div
-                  role="progressbar" aria-valuemin={0} aria-valuemax={bank.length || 0}
-                  aria-valuenow={Math.min(index + 1, bank.length)}
-                  className="h-full bg-gradient-to-r from-brand-500 to-accent-500 transition-[width] duration-300"
-                  style={{ width: bank.length ? `${((index + 1) / bank.length) * 100}%` : "0%" }} />
-              </div>
-
-              {/* footer & notes */}
-              <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
-                <p className="text-xs text-muted-foreground">
-                  Session time: {fmtMMSS(elapsed)}
-                  {prefs.qSecs ? (
-                    <span className="ml-3 inline-flex items-center gap-1 text-foreground/70">
-                      <Timer className="h-3 w-3" /> <span>Next in: {fmtMMSS(remaining)}</span>
-                    </span>
-                  ) : null}
-                </p>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setNotesOpen((v) => !v)}
-                    className="inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-1.5 text-foreground/80 hover:bg-secondary/80 focus-ring"
-                    title="Open notes">
-                    <StickyNote className="h-4 w-4" /> Notes
-                  </button>
-                  <button
-                    onClick={() => exportNotesCSV()}
-                    className="inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-1.5 text-foreground/80 hover:bg-secondary/80 focus-ring"
-                    title="Export notes">
-                    Export notes
-                  </button>
-
-                  {!completeOpen ? (
-                    <Button variant="primary" onClick={() => setCompleteOpen(true)} disabled={!role || !bank.length || loading} className="inline-flex items-center gap-2" title="Save this session">
-                      <CheckCircle2 className="h-4 w-4" /> Complete session
-                    </Button>
-                  ) : (
-                    <Button variant="ghost" onClick={() => setCompleteOpen(false)} className="inline-flex items-center gap-2" title="Cancel">
-                      <X className="h-4 w-4" /> Cancel
-                    </Button>
-                  )}
-                </div>
-              </div>
-
-              {/* notes panel */}
-              {notesOpen && current?.id && (
-                <div className="surface p-4 mt-4">
-                  <p className="mb-2 text-sm text-muted-foreground">Notes for this question</p>
-                  <Textarea
-                    value={note}
-                    onChange={(e) => setNoteState(e.target.value)}
-                    placeholder="Write your thoughts, structure, hints…"
-                    className="min-h-[120px]"
-                  />
-
-                </div>
-              )}
-
-              {/* NEW: ---- Transcript & Analysis UI ---- */}
-              {uploadError && (
-                <div className="mt-4 rounded border border-red-300 bg-red-50 p-3 text-sm text-red-700 break-words">
-                  {uploadError}
-                </div>
-              )}
-
-              {lastTranscript !== null && (
-                <div className="surface p-4 mt-2 space-y-3">
-                  <div className="mb-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                    <span>Latest transcript</span>
-                    {lastMeta && (
-                      <span className="rounded bg-muted px-2 py-0.5 text-xs break-all">
-                        {lastMeta.filename} • {lastMeta.content_type} • {Math.round(((lastMeta.size_bytes || 0) / 1024) * 10) / 10} KB
-                      </span>
-                    )}
-                  </div>
-
-                  {/* transcript text */}
-                  <Textarea
-                    defaultValue={lastTranscript || ""}
-                    className="min-h-[160px] w-full"
-                    aria-label="Transcript"
-                  />
-
-                  {/* optional: context/rubric to improve relevance scoring */}
-                  <input
-                    value={context}
-                    onChange={(e) => setContext(e.target.value)}
-                    placeholder="Optional: paste the question or rubric for relevance scoring"
-                    className="mt-2 w-full rounded border px-3 py-2 text-sm"
-                    aria-label="Analysis context"
-                  />
-
-                  {/* analyze button + error */}
-                  <div className="flex flex-wrap items-center gap-3 mt-1">
-                    <button
-                      onClick={analyzeTranscript}
-                      disabled={analyzing || !lastTranscript}
-                      className="rounded-lg border px-3 py-2 text-sm hover:bg-muted disabled:opacity-50 whitespace-nowrap"
-                    >
-                      {analyzing ? "Analyzing…" : "Analyze with GPT-4"}
-                    </button>
-                    {analysisError && <span className="text-sm text-red-600 break-words">{analysisError}</span>}
-                  </div>
-
-                  {/* analysis results */}
-                  {analysis && (
-                    <div className="rounded-lg border p-3 mt-2 overflow-hidden">
-                      <div className="mb-2 flex flex-wrap items-center gap-2">
-                        <span className="text-sm text-muted-foreground">Relevance score</span>
-                        <span className="rounded bg-muted px-2 py-0.5 text-xs">{analysis.score}/100</span>
-                      </div>
-
-                      <div className="w-full h-2 bg-muted rounded">
-                        <div
-                          className="h-2 rounded bg-blue-500"
-                          style={{ width: `${Math.max(0, Math.min(100, analysis.score || 0))}%` }}
-                        />
-                      </div>
-
-                      <div className="mt-3 grid gap-3 md:grid-cols-2">
-                        <div>
-                          <div className="text-sm font-medium mb-1">Keywords</div>
-                          <div className="flex flex-wrap gap-2">
-                            {(analysis.keywords || []).map((k: string) => (
-                              <span key={k} className="rounded bg-muted px-2 py-0.5 text-xs break-words">{k}</span>
-                            ))}
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-sm font-medium mb-1">Key phrases</div>
-                          <div className="flex flex-wrap gap-2">
-                            {(analysis.key_phrases || []).map((k: string) => (
-                              <span key={k} className="rounded bg-muted px-2 py-0.5 text-xs break-words">{k}</span>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-
-                      {analysis.summary && (
-                        <div className="mt-3">
-                          <div className="text-sm font-medium mb-1">Summary</div>
-                          <p className="text-sm leading-6 break-words">{analysis.summary}</p>
-                        </div>
-                      )}
-
-                      {analysis.rationale && (
-                        <details className="mt-3">
-                          <summary className="cursor-pointer text-sm text-muted-foreground">Model rationale</summary>
-                          <p className="mt-2 text-sm leading-6 whitespace-pre-wrap break-words">{analysis.rationale}</p>
-                        </details>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-              {/* ---- end transcript & analysis UI ---- */}
-
-              {/* complete/save panel */}
-              {completeOpen && (
-                <div className="surface p-4 mt-4">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-foreground">Set your score</p>
-                      <p className="text-xs text-muted-foreground">Move the slider and click Save</p>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className={`inline-flex items-center rounded-lg px-2 py-1 text-xs ring-1 ${scorePill(score)}`}>{score}</span>
-                      <input
-                        type="range"
-                        min={0}
-                        max={100}
-                        value={score}
-                        onChange={(e) => setScore(parseInt(e.target.value))}
-                        className="w-48 accent-brand-500"
-                      />
-                      <Button onClick={saveAttempt} className="ml-1">Save</Button>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </section>
+      <main className="min-h-[calc(100vh-200px)] w-full flex items-center justify-center">
+        {renderState()}
       </main>
     </RequireRole>
   );

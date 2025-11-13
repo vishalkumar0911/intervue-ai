@@ -1,6 +1,8 @@
-// src/lib/api.ts
-
+// frontend/src/lib/api.ts
 import { toast } from "sonner";
+// Import types from our new store
+import type { InterviewEvent } from "@/store/interview";
+
 /* ---------------- Types ---------------- */
 
 export type Question = {
@@ -9,10 +11,59 @@ export type Question = {
   text: string;
   topic?: string | null;
   difficulty?: "easy" | "medium" | "hard" | null;
+  
+  // NEW: The type of question, used to set the timer
+  question_type?: "short" | "long";
 
   // optional metadata used by Trainer UI / backend merge
   source?: "core" | "trainer";
   readonly?: boolean | null;
+};
+
+// NEW: This is the AI's response to a 'start' or 'next' call
+export type AIQuestionResponse = {
+  // The question the AI wants to ask (now includes question_type)
+  question: Question;
+  // 'question' means the interview continues
+  // 'end' means this is the last question
+  type: "question" | "end";
+  // The session ID for this interview
+  session_id: string;
+  // Optional: The AI's final summary if type is 'end'
+  final_summary?: string;
+};
+
+// NEW: This is the result from analyzing a single answer
+// This matches the backend model in backend/app/main.py
+export type AnalysisResult = {
+  id: string;
+  session_id: string;
+  score: number; // 0-100 (can be relevance_score)
+  keywords: string[];
+  key_phrases: string[];
+  summary: string;
+  rationale: string; // This is the "review"
+  model: string;
+  created: string;
+  
+  // NEW: Fields for the final report page
+  question_text?: string | null;
+  answer_transcript?: string | null;
+
+  // Specific to relevance scoring
+  relevance_score?: number;
+  matched_points?: string[];
+  missed_points?: string[];
+};
+
+// NEW: Transcript response from our /api/transcribe endpoint
+export type TranscribeResult = {
+  ok: boolean;
+  id: string;
+  transcript: string;
+  filename: string;
+  size_bytes: number;
+  content_type: string;
 };
 
 export type Attempt = {
@@ -83,6 +134,8 @@ const p = (path: string) => (USE_PROXY ? `/api${path}` : path);
 const SHOULD_ATTACH_KEY = !USE_PROXY && !!API_KEY;
 
 const DEFAULT_TIMEOUT = 12_000;
+// NEW: Increase timeout for AI-related calls
+const AI_TIMEOUT = 30_000;
 const DEFAULT_RETRY = 1;
 
 /* ---------------- Helpers ---------------- */
@@ -378,15 +431,21 @@ export const api = {
         method: "POST",
         body: { role },
       }),
+    // NEW: Wrapper for the GET /api/auth/role?email=... endpoint
+    getProfile: (email: string) =>
+      request<{ role: string | null }>(p("/auth/role"), {
+        query: { email },
+      }),
   },
 
   /* Admin endpoints */
   admin: {
     listUsers: () => request<AdminUser[]>(p("/admin/users")),
-    updateUserRole: (id: string, role: "Student" | "Trainer" | "Admin" | null) =>
+
+    updateUserRole: (email: string, role: "Student" | "Trainer" | "Admin" | null) =>
       request<AdminUser>(p("/admin/users"), {
         method: "PATCH",
-        body: { id, role },
+        body: { email, role },
       }),
   },
 
@@ -423,5 +482,128 @@ export const api = {
       request<{ ok: boolean; id: string }>(p(`/trainer/questions/${id}`), {
         method: "DELETE",
       }),
+  },
+
+  // NEW: All interview-flow APIs
+  interview: {
+    /**
+     * Starts a new interview session.
+     */
+    start: async (
+      role: string,
+      interviewType: "technical" | "hr",
+      resumeFile: File
+    ): Promise<AIQuestionResponse> => {
+      const formData = new FormData();
+      formData.append("role", role);
+      formData.append("interview_type", interviewType);
+      formData.append("resume_file", resumeFile);
+
+      // We use fetch directly for FormData
+      const res = await fetchWithTimeout(
+        `${API_BASE}${p("/interview/start")}`,
+        {
+          method: "POST",
+          body: formData,
+          headers: {
+            ...(SHOULD_ATTACH_KEY ? { "x-api-key": API_KEY } : {}),
+          },
+        },
+        AI_TIMEOUT
+      );
+
+      if (!res.ok) throw await toError(res);
+      return (await res.json()) as AIQuestionResponse;
+    },
+
+    /**
+     * Gets the next question from the AI.
+     */
+    next: (
+      sessionId: string,
+      history: InterviewEvent[],
+      role: string, // Pass role and type for context
+      interviewType: "technical" | "hr"
+    ): Promise<AIQuestionResponse> => {
+      return request<AIQuestionResponse>(
+        p("/interview/next"),
+        {
+          method: "POST",
+          body: { session_id: sessionId, history, role, interview_type: interviewType },
+          auth: true,
+          timeout: AI_TIMEOUT,
+        }
+      );
+    },
+
+    /**
+     * Transcribes an audio file.
+     */
+    transcribe: async (
+      file: File,
+      questionId?: string
+    ): Promise<TranscribeResult> => {
+      const formData = new FormData();
+      formData.append("file", file, file.name || "audio.webm");
+      
+      // --- FIX IS HERE ---
+      // We build the URL as a string first, *then* call fetch.
+      // We do not use `new URL()` with a relative path.
+      let urlStr = `${API_BASE}${p("/transcribe")}`;
+      if (questionId) {
+        urlStr += `?question_id=${encodeURIComponent(questionId)}`;
+      }
+
+      const res = await fetchWithTimeout(
+        urlStr,
+        {
+          method: "POST",
+          body: formData,
+          headers: {
+            ...(SHOULD_ATTACH_KEY ? { "x-api-key": API_KEY } : {}),
+          },
+        },
+        AI_TIMEOUT // Transcription can take time
+      );
+
+      if (!res.ok) throw await toError(res);
+      return (await res.json()) as TranscribeResult;
+    },
+
+    /**
+     * Analyzes a transcript against a question.
+     */
+    analyze: (
+      transcript: string,
+      question: string,
+      sessionId: string
+    ): Promise<AnalysisResult> => {
+      return request<AnalysisResult>(
+        p("/analyze_content"), // Use the existing relevance-scoring endpoint
+        {
+          method: "POST",
+          body: {
+            answer_transcript: transcript,
+            question: question,
+            session_id: sessionId,
+          },
+          auth: true,
+          timeout: AI_TIMEOUT,
+        }
+      );
+    },
+  },
+
+  // NEW: API for the report page
+  analysis: {
+    /**
+     * Gets all analysis records for a specific session.
+     */
+    listBySession: (sessionId: string): Promise<AnalysisResult[]> => {
+      return request<AnalysisResult[]>(p("/analysis"), {
+        query: { session_id: sessionId, limit: "200" }, // Get all for session
+        auth: true,
+      });
+    },
   },
 };

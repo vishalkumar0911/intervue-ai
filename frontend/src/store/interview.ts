@@ -1,61 +1,85 @@
+// frontend/src/store/interview.ts
 "use client";
 
 import { create } from "zustand";
-import type { Question } from "@/lib/api";
+// We'll define these types in api.ts later
+import type { Question, AnalysisResult } from "@/lib/api";
 
-export type Difficulty = "" | "easy" | "medium" | "hard";
+// The states the interview can be in
+export type InterviewState =
+  | "configuring" // User is setting up (role, type, resume)
+  | "starting"    // We are calling the backend to get the first question
+  | "asking"      // AI is "speaking" (typewriter effect)
+  | "listening"   // AI is "listening" (audio recorder is on)
+  | "processing"  // User finished, we are transcribing, analyzing, and getting next question
+  | "ended";      // AI has ended the interview
 
-type InterviewState = {
+// Each "turn" in the conversation
+export type InterviewEvent = {
+  question: Question;
+  transcript: string;
+  analysis: AnalysisResult;
+};
+
+type InterviewStore = {
+  // --- Configuration ---
   role: string;
-  difficulty: Difficulty;
-  shuffle: boolean;
+  interviewType: "technical" | "hr";
+  resumeFile: File | null;
+  sessionId: string | null;
 
-  bank: Question[];
-  index: number;
-
-  loading: boolean;
+  // --- State Machine ---
+  interviewState: InterviewState;
+  currentQuestion: Question | null;
+  history: InterviewEvent[];
   error: string | null;
+  attempt: number; // NEW: A counter to force re-renders
 
+  // --- Actions ---
+  // Setup
   setRole: (role: string) => void;
-  setDifficulty: (d: Difficulty) => void;
-  setShuffle: (s: boolean) => void;
+  setInterviewType: (type: "technical" | "hr") => void;
+  setResumeFile: (file: File | null) => void;
 
-  setBank: (q: Question[]) => void;
-  setIndex: (i: number) => void;
+  // State setters (used by the page logic)
+  setSessionId: (id: string) => void;
+  setState: (state: InterviewState) => void;
+  setCurrentQuestion: (question: Question | null) => void;
+  addHistoryEvent: (event: InterviewEvent) => void;
+  setError: (error: string | null) => void;
+  incrementAttempt: () => void; // NEW: Action to increment the counter
 
-  setLoading: (v: boolean) => void;
-  setError: (e: string | null) => void;
-
-  next: () => void;
+  // Reset
   reset: () => void;
 };
 
-export const useInterviewStore = create<InterviewState>((set, get) => ({
+const initialState = {
   role: "",
-  difficulty: "",
-  shuffle: false,
-
-  bank: [],
-  index: 0,
-
-  loading: false,
+  interviewType: "technical" as "technical" | "hr",
+  resumeFile: null,
+  sessionId: null,
+  interviewState: "configuring" as InterviewState,
+  currentQuestion: null,
+  history: [],
   error: null,
+  attempt: 0, // NEW: Initialize counter
+};
 
+export const useInterviewStore = create<InterviewStore>((set) => ({
+  ...initialState,
+
+  // --- Actions ---
   setRole: (role) => set({ role }),
-  setDifficulty: (difficulty) => set({ difficulty }),
-  setShuffle: (shuffle) => set({ shuffle }),
+  setInterviewType: (type) => set({ interviewType: type }),
+  setResumeFile: (file) => set({ resumeFile: file }),
 
-  setBank: (bank) => set({ bank }),
-  setIndex: (index) => set({ index }),
-
-  setLoading: (loading) => set({ loading }),
+  setSessionId: (id) => set({ sessionId: id }),
+  setState: (state) => set({ interviewState: state }),
+  setCurrentQuestion: (question) => set({ currentQuestion: question }),
+  addHistoryEvent: (event) =>
+    set((state) => ({ history: [...state.history, event] })),
   setError: (error) => set({ error }),
+  incrementAttempt: () => set((state) => ({ attempt: state.attempt + 1 })), // NEW
 
-  next: () => {
-    const { bank, index } = get();
-    if (!bank.length) return;
-    set({ index: (index + 1) % bank.length });
-  },
-
-  reset: () => set({ bank: [], index: 0, error: null }),
+  reset: () => set(initialState),
 }));

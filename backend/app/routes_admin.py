@@ -10,6 +10,12 @@ from .deps import require_admin
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
+# --- NEW: Define the public router ---
+# This router will NOT have the admin dependency
+public_router = APIRouter(tags=["public"])
+# -------------------------------------
+
+
 # ✅ Canonical users store: backend/app/data/users.json
 USERS_DB = Path(__file__).resolve().parent / "data" / "users.json"
 USERS_DB.parent.mkdir(parents=True, exist_ok=True)
@@ -52,8 +58,10 @@ class UserOut(BaseModel):
     email: str
     role: Optional[str] = None
 
+# Accept either 'email' or 'id' from caller; role may be None (explicit clear)
 class RolePatch(BaseModel):
-    email: str
+    email: Optional[str] = None
+    id: Optional[str] = None
     role: Optional[str] = None  # "Student" | "Trainer" | "Admin" | null
 
 @router.get("/users", response_model=List[UserOut])
@@ -67,31 +75,68 @@ def list_users(_admin = Depends(require_admin)):
             role=u.get("role"),
         )
         for email, u in users.items()
+        if isinstance(u, dict)
     ]
 
 @router.patch("/users", response_model=UserOut)
 def update_user_role(p: RolePatch, _admin = Depends(require_admin)):
+    """
+    Patch a user's role.
+
+    Accepts payload with either:
+      - { "email": "user@example.com", "role": "Trainer" }
+      - { "id": "user@example.com", "role": "Trainer" }   # `id` is accepted too for compatibility
+      - role may be null to clear the role
+    """
+
+    # Determine lookup key (prefer explicit email)
+    key_raw = (p.email or p.id or "").strip()
+    if not key_raw:
+        # let Pydantic error map to 422 for missing body fields
+        raise HTTPException(status_code=422, detail="Either 'email' or 'id' must be provided")
+
+    key = key_raw.lower()
+
     users = _load_users()
-    u = users.get(p.email)
+
+    # because the store uses lowercase email keys, normalize
+    u = users.get(key)
+    if not u:
+        # If the provided id is not an email (rare), attempt to find user by id field value
+        # e.g. user record keyed by email but contains id equal to provided id - try to find it
+        if "@" not in key_raw:
+            # fallback search: scan values for matching id field (case-sensitive)
+            for e, rec in users.items():
+                if isinstance(rec, dict) and rec.get("id") == key_raw:
+                    key = e
+                    u = rec
+                    break
+
     if not u:
         raise HTTPException(status_code=404, detail="User not found")
+
     before_role = u.get("role")
-    u["role"] = p.role
-    users[p.email] = u
+
+    # If role is explicitly provided (even if null), set it. If omitted, preserve existing.
+    if hasattr(p, "role"):
+        # p.role can be None (explicit clear) or a string
+        u["role"] = p.role
+
+    users[key] = u
     _save_users(users)
 
     # 🔏 write audit
     _append_audit({
         "type": "role_change",
-        "email": p.email,
+        "email": key,
         "before": before_role,
-        "after": p.role,
+        "after": u.get("role"),
     })
 
     return UserOut(
-        id=u.get("id") or p.email,
-        name=u.get("name") or p.email.split("@")[0],
-        email=p.email,
+        id=u.get("id") or key,
+        name=u.get("name") or key.split("@")[0],
+        email=key,
         role=u.get("role"),
     )
 
@@ -109,3 +154,34 @@ def recent_audit(limit: int = Query(50, ge=1, le=200), _admin = Depends(require_
     # newest last → newest first for UI
     rows.reverse()
     return [AuditEvent(**r) for r in rows]
+
+
+# ---------------------------
+# DEV-ONLY: Lightweight public lookup (role by email)
+# ---------------------------
+# This small router exposes a single endpoint that returns the role for a given email.
+# Intended for demo/dev usage so local demo users (signup/localStorage) can synchronize
+# their role without requiring a NextAuth session on the client.
+#
+# IMPORTANT: do NOT expose this endpoint in production or ensure it's properly authenticated.
+#
+# --- MOVED to public_router ---
+@public_router.get("/auth/role")
+async def get_role_for_email(email: str = Query(..., min_length=3)):
+    """
+    DEV ONLY: Return the role stored in backend users.json for the provided email.
+    Response: { "role": <string|null> }
+    404 if user not found. 500 on read errors.
+    """
+    try:
+        data = _load_users()
+    except Exception:
+        raise HTTPException(status_code=500, detail="users data not available")
+
+    # normalize lookup using lowercase email key (store is expected to use lowercase)
+    key = (email or "").strip().lower()
+    u = data.get(key)
+    if not u or not isinstance(u, dict):
+        raise HTTPException(status_code=404, detail="user not found")
+    # explicit None allowed
+    return {"role": u.get("role")}
