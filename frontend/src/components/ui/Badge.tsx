@@ -1,3 +1,4 @@
+// frontend/src/components/ui/Badge.tsx
 import { HTMLAttributes, ReactNode } from "react";
 import clsx from "clsx";
 import { twMerge } from "tailwind-merge";

@@ -7,7 +7,6 @@ import React, { useEffect, useMemo, useState, useRef } from "react";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Menu, X, ChevronDown, LogOut } from "lucide-react";
 import { useAuth } from "@/components/auth/AuthProvider";
-// 1. Import RBAC helpers
 import { hasAnyRole, type Role } from "@/lib/rbac";
 
 // Update Item type to include optional role restrictions
@@ -202,7 +201,12 @@ export function Navbar() {
               {open ? <X size={18} /> : <Menu size={18} />}
             </button>
 
-            <Link href="/" className="ml-1">
+            {/* ENHANCED LOGO: Encased Initial 'I' + Gradient Text */}
+            <Link href="/" className="ml-1 inline-flex items-center gap-2">
+              <div className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-brand-500 to-cyan-500 text-primary-foreground shadow-lg">
+                {/* Initial 'I' for Intervue.AI */}
+                <span className="font-extrabold text-base leading-none">I</span> 
+              </div>
               <span className="bg-gradient-to-r from-brand-400 to-cyan-400 bg-clip-text text-lg font-bold text-transparent">
                 Intervue.AI
               </span>

@@ -188,6 +188,7 @@ html, body {
   overflow-x: hidden;
 }
 
+
 /* ---------------- Components ---------------- */
 @layer components {
   .card { @apply bg-card text-card-foreground rounded-2xl border shadow-soft; }
@@ -297,4 +298,15 @@ header,
 .app-header {
   position: relative;
   z-index: 60; /* should be higher than main's z-index */
+}
+
+
+/* keep auth pages full-bleed even if data-sidebar exists */
+html:not([data-sidebar]) .main-with-sidebar,
+html:not([data-sidebar]) main#main,
+.auth-left-override .main-with-sidebar,
+.auth-left-override main#main {
+  max-width: 100% !important;
+  margin-left: 0 !important;
+  padding-left: max(1rem, env(safe-area-inset-left)) !important;
 }
