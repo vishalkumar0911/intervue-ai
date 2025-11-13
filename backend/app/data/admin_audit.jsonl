@@ -78,3 +78,4 @@
 {"type": "role_change", "email": "pankajkrg93@gmail.com", "before": "Trainer", "after": null, "ts": 1763016028}
 {"type": "role_change", "email": "pankajkrg93@gmail.com", "before": null, "after": "Student", "ts": 1763016034}
 {"type": "role_change", "email": "abhijeetstud@example.com", "before": "Student", "after": "Trainer", "ts": 1763016040}
+{"type": "role_change", "email": "pankaj.gupta@mitwpu.edu.in", "before": null, "after": "Student", "ts": 1763023169}

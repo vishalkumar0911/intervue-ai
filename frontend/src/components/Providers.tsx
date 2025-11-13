@@ -1,13 +1,18 @@
-// frontend/src/components/Providers.tsx
 "use client";
 
 import React from "react";
 import { ThemeProvider } from "@/components/ThemeProvider";
-import { SidebarProvider } from "@/components/shell/Sidebar";
 import { SessionProvider } from "next-auth/react";
 import { AuthProvider } from "@/components/auth/AuthProvider";
 import FirstVisitRedirect from "@/components/FirstVisitRedirect";
 import { usePathname } from "next/navigation";
+
+/**
+ * NOTE:
+ * SidebarProvider was intentionally removed from here so the sidebar state/attribute
+ * (data-sidebar) is only present on routes that actually mount the sidebar.
+ * The SidebarProvider lives in AppLayout / SidebarShell where the sidebar is used.
+ */
 
 const PUBLIC_PREFIXES = [
   "/login",
@@ -30,11 +35,9 @@ export default function Providers({ children }: { children: React.ReactNode }) {
     >
       <SessionProvider>
         <AuthProvider>
-          <SidebarProvider>
-            {/* Only run redirect logic on non-auth pages */}
-            {!isPublic && <FirstVisitRedirect />}
-            {children}
-          </SidebarProvider>
+          {/* Only run redirect logic on non-auth pages */}
+          {!isPublic && <FirstVisitRedirect />}
+          {children}
         </AuthProvider>
       </SessionProvider>
     </ThemeProvider>

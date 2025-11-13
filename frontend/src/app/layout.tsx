@@ -5,9 +5,11 @@ import "./globals.css";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import Providers from "@/components/Providers";
 import { Navbar } from "@/components/Navbar";
-import SidebarShell from "@/components/shell/SidebarShell";
 import { Footer } from "@/components/Footer";
 import { Toaster } from "sonner";
+
+// defensive guard to remove data-sidebar on non-sidebar routes
+import SidebarAttributeGuard from "@/components/shell/SidebarAttributeGuard";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans", display: "swap" });
 const mono  = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono", display: "swap" });
@@ -81,9 +83,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </div>
 
         <Providers>
+          {/* Guard removes leftover data-sidebar attribute on routes that don't render sidebar */}
+          <SidebarAttributeGuard />
+
           <Navbar />
-          {/* SidebarShell decides whether to mount the sidebar on the current route */}
-          <SidebarShell />
 
           {/* main-with-sidebar will be shifted on desktop by CSS var --sidebar-width */}
           {/* Use controlled padding instead of Tailwind's container to avoid the left-gap */}

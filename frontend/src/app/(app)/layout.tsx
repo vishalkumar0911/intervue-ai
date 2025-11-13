@@ -1,9 +1,9 @@
-// frontend/src/app/(app)/layout.tsx
 "use client";
 
 import React, { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
-import Sidebar, { SidebarTrigger, useSidebar, SidebarProvider } from "@/components/shell/Sidebar";
+import { SidebarTrigger, useSidebar, SidebarProvider } from "@/components/shell/Sidebar";
+import SidebarShell from "@/components/shell/SidebarShell";
 
 /** Keyboard skip link */
 function SkipToContent() {
@@ -18,8 +18,7 @@ function SkipToContent() {
 }
 
 function LayoutInner({ children }: { children: React.ReactNode }) {
-  const { collapsed, open, setOpen } = useSidebar();
-  const style = { ["--sb" as any]: collapsed ? "72px" : "264px" } as React.CSSProperties;
+  const { open, setOpen } = useSidebar();
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -32,35 +31,22 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
   const overlayRef = useRef<HTMLDivElement>(null);
 
   return (
-    <div
-      className="relative w-full gap-4 px-4 py-4 md:grid md:min-h-[calc(100dvh-3.5rem)] md:grid-cols-[var(--sb)_1fr]"
-      style={style}
-    >
+    <div className="relative w-full gap-4 px-4 py-4 md:min-h-[calc(100dvh-3.5rem)]">
       <SkipToContent />
 
-      {/* Sidebar column */}
-      <aside role="complementary" aria-label="Primary navigation" className="relative">
-        <Sidebar />
-      </aside>
+      {/* Sidebar is conditionally rendered by SidebarShell.
+          SidebarShell will return null on pages where sidebar shouldn't exist.
+          Because this file wraps LayoutInner in SidebarProvider (see export below),
+          SidebarShell (and the Sidebar it mounts) will operate inside the provider. */}
+      <SidebarShell />
 
-      {/* Mobile overlay */}
-      {open && (
-        <div
-          ref={overlayRef}
-          onClick={() => setOpen(false)}
-          aria-hidden="true"
-          className="fixed inset-0 z-30 bg-black/40 backdrop-blur-sm md:hidden"
-        />
-      )}
+      {/* Mobile header + trigger */}
+      <div className="mb-3 flex items-center justify-between md:hidden">
+        <SidebarTrigger />
+      </div>
 
-      {/* Main column */}
+      {/* Main content wrapper */}
       <div className="relative min-w-0">
-        {/* mobile header row */}
-        <div className="mb-3 flex items-center justify-between md:hidden">
-          <SidebarTrigger />
-        </div>
-
-        {/* Only the content is width-constrained */}
         <main
           id="app-main"
           role="main"
@@ -71,14 +57,25 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
           {children}
         </main>
       </div>
+
+      {/* Mobile overlay (covers main when mobile drawer open) */}
+      {open && (
+        <div
+          ref={overlayRef}
+          onClick={() => setOpen(false)}
+          aria-hidden="true"
+          className="fixed inset-0 z-30 bg-black/40 backdrop-blur-sm md:hidden"
+        />
+      )}
     </div>
   );
 }
 
 export default function AppLayout({ children }: { children: ReactNode }) {
   return (
-      <SidebarProvider>
-        <LayoutInner>{children}</LayoutInner>
-      </SidebarProvider>
+    <SidebarProvider>
+      {/* SidebarProvider provides data-sidebar attribute and collapsed state */}
+      <LayoutInner>{children}</LayoutInner>
+    </SidebarProvider>
   );
 }

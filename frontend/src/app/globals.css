@@ -118,7 +118,7 @@
   Key ideas:
   - --sidebar-width is the single source of truth
   - collapsed state toggles via data-sidebar="collapsed" on <html>
-  - main content uses margin-left (not padding) so centering + container alignment remain correct
+  - main content shifts **only** when <html data-sidebar> exists
   - small screens remove sidebar offset
 */
 :root {
@@ -133,18 +133,54 @@
   --sidebar-width: var(--sidebar-width-collapsed);
 }
 
-/* desktop: main area shifts by sidebar width (smooth transition) */
+/* Default: main-with-sidebar should NOT reserve any left gutter */
+.main-with-sidebar {
+  margin-left: 0;
+  transition: margin-left 200ms ease-in-out;
+}
+
+/* On desktop only: shift the main column when the html has the data-sidebar attribute.
+   This prevents reserving space when the sidebar isn't mounted (black strip fix).
+*/
 @media (min-width: 768px) {
+  /* only shift when the sidebar is present (attribute is set) */
+  html[data-sidebar] .main-with-sidebar {
+    margin-left: var(--sidebar-width);
+  }
+
+  /* collapsed variant (if attribute is present and value is 'collapsed') */
+  html[data-sidebar="collapsed"] .main-with-sidebar {
+    margin-left: var(--sidebar-width-collapsed);
+  }
+
+  /* legacy helper from your original file (keeps behavior consistent) */
   .main-with-sidebar.container {
     padding-left: 0 !important;
   }
 }
 
-/* mobile: remove offset so auth pages etc remain full width */
+/* mobile: ensure no offset so auth pages etc remain full width */
 @media (max-width: 767px) {
   .main-with-sidebar {
     margin-left: 0 !important;
   }
+}
+
+/* When sidebar is NOT present on the page, make the main truly full-bleed.
+   This prevents the narrow "black strip" on auth pages where the centered max-width
+   main leaves darker page edges visible. */
+html:not([data-sidebar]) .main-with-sidebar,
+html:not([data-sidebar]) main#main {
+  /* remove centered max-width on auth pages so the page background covers full width */
+  max-width: 100% !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  padding-left: max(1rem, env(safe-area-inset-left)) !important;
+  padding-right: max(1rem, env(safe-area-inset-right)) !important;
+  /* allow the grid background to show consistently across the full viewport */
+  background: transparent !important;
+  /* ensure it sits above background decoration if needed */
+  z-index: 1;
 }
 
 /* ensure fixed sidebar never produces horizontal scroll */
@@ -239,4 +275,26 @@ html, body {
   .nice-scrollbar::-webkit-scrollbar { width: 10px; height: 10px; }
   .nice-scrollbar::-webkit-scrollbar-thumb { background-color: hsl(var(--muted-foreground)/0.35); border-radius: 9999px; }
   .nice-scrollbar::-webkit-scrollbar-track { background: transparent; }
+}
+
+
+/* ---- cover the thin horizontal seam under the navbar on auth pages ---- */
+/* only on pages without the sidebar (auth/login/signup) */
+html:not([data-sidebar]) main#main,
+html:not([data-sidebar]) .main-with-sidebar {
+  /* lift the main up so the navbar overlaps and hides the seam */
+  transform: translateY(-22px);
+  /* compensate so vertical rhythm doesn't change: add the same amount to top padding */
+  padding-top: calc(max(1rem, env(safe-area-inset-top)) + 6px) !important;
+  /* optional: ensure it sits above page decoration but below navbar */
+  z-index: 1;
+}
+
+/* make sure navbar is above the lifted main */
+.nav-glass,
+header,
+.navbar,
+.app-header {
+  position: relative;
+  z-index: 60; /* should be higher than main's z-index */
 }

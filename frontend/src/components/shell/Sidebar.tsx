@@ -1,4 +1,3 @@
-// frontend/src/components/shell/Sidebar.tsx
 "use client";
 
 import React, { createContext, useContext, useEffect, useState } from "react";
@@ -65,12 +64,22 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
     } catch {}
   }, [collapsed]);
 
-  // set an attribute on html for CSS to pick up (data-sidebar="collapsed"|"expanded")
+    // Only set data-sidebar when the desktop sidebar element is actually mounted.
+  // This prevents pages which don't render the sidebar from still having the
+  // data attribute (and therefore the left gutter).
   useEffect(() => {
     try {
-      document.documentElement.setAttribute("data-sidebar", collapsed ? "collapsed" : "expanded");
+      const el = typeof document !== "undefined" ? document.getElementById("desktop-sidebar") : null;
+      if (el) {
+        // sidebar exists in DOM; update attribute to reflect collapsed/expanded
+        document.documentElement.setAttribute("data-sidebar", collapsed ? "collapsed" : "expanded");
+      } else {
+        // sidebar not present — ensure attribute is removed to avoid reserved gutter
+        document.documentElement.removeAttribute("data-sidebar");
+      }
     } catch {}
   }, [collapsed]);
+
 
   const value: SidebarContextType = {
     collapsed,
@@ -135,7 +144,6 @@ function NavList({ collapsed }: { collapsed: boolean }) {
         const active = pathname === href || (href !== "/" && pathname.startsWith(href + "/"));
         return (
           <li key={href}>
-            {/* Keep icon always visible. When collapsed, we show title attribute and visually only the icon */}
             <Link
               href={href}
               title={collapsed ? label : undefined}
@@ -151,7 +159,6 @@ function NavList({ collapsed }: { collapsed: boolean }) {
                 <Icon size={18} className={active ? "opacity-100" : "opacity-80"} />
               </span>
 
-              {/* Hide label when collapsed; keep icon centered */}
               <span
                 className={clsx(
                   "truncate transition-all duration-200",
@@ -171,21 +178,16 @@ function NavList({ collapsed }: { collapsed: boolean }) {
 
 /* ----------------------- Desktop sidebar (fixed) ------------------------ */
 
-/**
- * DesktopSidebar
- * - Uses CSS variable --sidebar-width (set by globals.css)
- * - Fixed positioning so it doesn't alter container flow; main uses margin-left.
- * - Internal nav is scrollable (nice-scrollbar).
- */
 function DesktopSidebar() {
   const { collapsed, collapse, expand } = useSidebar();
 
   return (
     <>
       <aside
+        id="desktop-sidebar"
         className={clsx("hidden md:block z-40")}
         style={{
-          width: "var(--sidebar-width)",
+          width: "var(--sidebar-width)", // unified variable
           position: "fixed",
           left: 0,
           top: "3.5rem", // same top as your navbar
@@ -215,7 +217,6 @@ function DesktopSidebar() {
         </div>
       </aside>
 
-      {/* Collapse button positioned using the same css var so it stays aligned */}
       <SidebarCollapseButton collapsed={collapsed} onToggle={() => (collapsed ? expand() : collapse())} />
     </>
   );
@@ -223,11 +224,6 @@ function DesktopSidebar() {
 
 /* ----------------------- collapse button (fixed) ----------------------- */
 
-/**
- * Small, unobtrusive collapse button.
- * It is placed with `left: calc(var(--sidebar-width) - 18px)` so it tracks the sidebar edge.
- * Use smaller size so it doesn't create large gap when expanded.
- */
 function SidebarCollapseButton({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
   return (
     <button

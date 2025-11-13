@@ -94,5 +94,21 @@
     "role": "Trainer",
     "provider": "local",
     "createdAt": 1762989591
+  },
+  "pankaj.gupta@mitwpu.edu.in": {
+    "id": "108332664310796944676",
+    "email": "pankaj.gupta@mitwpu.edu.in",
+    "name": "Pankaj Kumar Gupta",
+    "role": null,
+    "provider": "google",
+    "createdAt": 1763022840
+  },
+  "devendraadmin@example.com": {
+    "id": "devendraadmin@example.com",
+    "email": "devendraadmin@example.com",
+    "name": "devendra",
+    "role": "Admin",
+    "provider": "local",
+    "createdAt": 1763023126
   }
 }

@@ -1,3 +1,4 @@
+// frontend/src/components/shell/AppShell.tsx
 "use client";
 
 import { useState } from "react";
